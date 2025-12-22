@@ -19,33 +19,6 @@ services:
         aliases:
           - inception
 
-  inception-gpu:
-    container_name: inception-gpu
-    build:
-      context: ./inception
-      args:
-        TARGET_ENV: prod
-        BASE_IMAGE: nvidia/cuda:12.4.0-devel-ubuntu22.04
-        UV_SYNC_FLAGS: "-v"
-    image: inception-gpu
-    profiles: ["gpu", "cuda"]
-    environment:
-      - TRANSFORMER_MODEL_NAME=freelawproject/modernbert-embed-base_finetune_512
-      - MAX_BATCH_SIZE=32
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
-    ports:
-      - "8005:8005"
-    networks:
-      default:
-        aliases:
-          - inception
-
   doctor:
     container_name: doctor
     build:
@@ -65,11 +38,10 @@ services:
     image: inception-demo-client
     profiles: ["cli", "demo"]
     env_file:
-      - ./client/.env
+      - ./.env
     environment:
       - INCEPTION_URL=http://inception:8005
       - DOCTOR_URL=http://doctor:5050
-      - MISTRAL_OCR_API_KEY=${MISTRAL_OCR_API_KEY}
     volumes:
       - ./client/files:/app/files
       - ./client/src:/app/src
