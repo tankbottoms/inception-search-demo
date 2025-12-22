@@ -3,11 +3,14 @@ set -e
 
 if [ "$TARGET_ENV" = "prod" ]; then
     # Production command
+    # --preload loads the app once in master process before forking workers
+    # This prevents multiple workers from trying to initialize the model simultaneously
     exec gunicorn \
         --workers=${EMBEDDING_WORKERS:-4} \
         --worker-class=uvicorn.workers.UvicornWorker \
         --bind=0.0.0.0:8005 \
         --timeout=300 \
+        --preload \
         --access-logfile=- \
         --error-logfile=- \
         inception.main:app
