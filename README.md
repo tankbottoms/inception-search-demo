@@ -14,42 +14,63 @@ This demo showcases:
 
 ## Features
 
-- 📄 **Multi-format OCR**: PDFs, images, Office documents
-- 🔍 **Semantic Search**: Context-aware document retrieval
-- 🚀 **GPU Support**: CUDA acceleration for faster processing
-- 🐳 **Docker-based**: Complete containerized stack
-- 🧪 **Automated Testing**: Built-in test automation
+- Multi-format OCR: PDFs, images, Office documents
+- Semantic Search: Context-aware document retrieval
+- GPU Support: CUDA 12.6+ acceleration for faster processing
+- Docker-based: Complete containerized stack
+- Automated Testing: Built-in test automation
 
-## Quick Start
+## Quickstart
 
 ### Prerequisites
 
 - [Docker](https://www.docker.com/) & [Docker Compose](https://docs.docker.com/compose/)
-- [Bun](https://bun.sh/) (optional, for local development)
-- Mistral API Key (get one at [https://mistral.ai](https://mistral.ai))
+- [Bun](https://bun.sh/) (for running tests)
+- Mistral API Key (get one at [https://console.mistral.ai](https://console.mistral.ai))
 
 ### 1. Configure Environment
 
-Create `client/.env`:
+Create `.env` in the project root:
 
 ```bash
-MISTRAL_OCR_API_KEY=your-api-key-here
+cp .env.example .env
+# Edit .env and add your Mistral API key
+```
+
+Or create it manually:
+
+```bash
+echo "MISTRAL_OCR_API_KEY=your-api-key-here" > .env
 ```
 
 ### 2. Run the Demo
 
-The easiest way to test the complete stack:
+The test script validates everything works end-to-end:
 
 ```bash
-./test-docker-stack.sh
+# CPU mode (default)
+./tests/test-docker-stack.sh
+
+# GPU mode (requires NVIDIA GPU with CUDA 12.6+)
+PROFILE=gpu ./tests/test-docker-stack.sh
 ```
 
-This script will:
-- Build all Docker images
-- Start services (Inception + Doctor)
-- Run the demo (index all files + search for "securities fraud")
-- Show results
-- Clean up containers
+The script will:
+1. **Test Mistral OCR API** - Validates your API key works
+2. **Build Docker images** - Creates inception-cpu/gpu and client images
+3. **Start services** - Launches the embedding service
+4. **Run demo** - Index sample files and search for "securities fraud"
+5. **Show results** - Display search results with similarity scores
+6. **Clean up** - Stop and remove containers
+
+### 3. Quick Test (API Only)
+
+To test just the Mistral OCR API without Docker:
+
+```bash
+cd client && bun install && cd ..
+bun run tests/test-mistral-ocr.ts
+```
 
 ## Usage
 
@@ -221,23 +242,30 @@ docker compose --profile doctor up -d doctor
 
 ### Test Scripts
 
-Located in `test/` directory:
+Located in `tests/` directory:
 
-- `test-mistral-ocr.ts` - Test Mistral OCR standalone
+- `test-docker-stack.sh` - Full end-to-end test of Docker stack
+- `test-mistral-ocr.ts` - Test Mistral OCR API standalone
 
 ```bash
-cd client
-bun run ../test/test-mistral-ocr.ts "files/sample.pdf"
+# Test full Docker stack
+./tests/test-docker-stack.sh
+
+# Test Mistral OCR API only
+bun run tests/test-mistral-ocr.ts
+
+# Test with a specific file
+bun run tests/test-mistral-ocr.ts "client/files/sample.pdf"
 ```
 
 ## Configuration
 
 ### Environment Variables
 
-**Client (`client/.env`):**
+**Project Root (`.env`):**
 ```bash
+# Required - Mistral OCR API key
 MISTRAL_OCR_API_KEY=your-key-here
-GOOGLE_API_KEY=optional-google-key
 ```
 
 **Docker Compose:**
@@ -319,8 +347,9 @@ docker compose restart
 
 ```
 inception-demo/
-├── client/                 # TypeScript/Bun CLI
-│   ├── .env               # Environment variables (API keys)
+├── .env                   # Environment variables (API keys) - create from .env.example
+├── .env.example           # Example environment file
+├── client/                # TypeScript/Bun CLI
 │   ├── files/             # Document storage
 │   ├── src/
 │   │   ├── index.ts       # CLI commands
@@ -328,10 +357,10 @@ inception-demo/
 │   └── embeddings.json    # Vector index (generated)
 ├── inception/             # Python embedding service
 ├── doctor/                # Document processing service
-├── test/                  # Test scripts
-│   └── test-mistral-ocr.ts
+├── tests/                 # Test scripts
+│   ├── test-docker-stack.sh    # Full Docker stack test
+│   └── test-mistral-ocr.ts     # Mistral OCR API test
 ├── docker-compose.yml     # Service orchestration
-├── test-docker-stack.sh   # Automated testing
 └── README.md              # This file
 ```
 
@@ -339,7 +368,7 @@ inception-demo/
 
 ### Requirements
 
-- NVIDIA GPU with CUDA 12.4+
+- NVIDIA GPU with CUDA 12.6+
 - NVIDIA Docker runtime
 - Linux host (GPU passthrough from Mac/Windows not supported)
 
@@ -353,7 +382,7 @@ docker compose --profile gpu build inception-gpu
 docker compose --profile gpu up -d inception-gpu
 
 # Test with GPU
-PROFILE=gpu ./test-docker-stack.sh
+PROFILE=gpu ./tests/test-docker-stack.sh
 ```
 
 ### Verify GPU Access
@@ -364,7 +393,7 @@ docker compose exec inception-gpu nvidia-smi
 
 ## CI/CD Integration
 
-The `test-docker-stack.sh` script is designed for CI/CD:
+The `tests/test-docker-stack.sh` script is designed for CI/CD:
 
 ```yaml
 # Example GitHub Actions
@@ -372,7 +401,8 @@ The `test-docker-stack.sh` script is designed for CI/CD:
   env:
     MISTRAL_OCR_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
   run: |
-    ./test-docker-stack.sh
+    echo "MISTRAL_OCR_API_KEY=$MISTRAL_OCR_API_KEY" > .env
+    ./tests/test-docker-stack.sh
 ```
 
 ## Resources
