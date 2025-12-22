@@ -1,0 +1,81 @@
+services:
+  inception-cpu:
+    container_name: inception-cpu
+    build:
+      context: ./inception
+      args:
+        TARGET_ENV: dev
+        BASE_IMAGE: ubuntu:24.04
+        UV_SYNC_FLAGS: "-v"
+    image: inception-cpu
+    profiles: ["m1", "cpu", "default", "demo"]
+    environment:
+      - TRANSFORMER_MODEL_NAME=freelawproject/modernbert-embed-base_finetune_512
+      - MAX_BATCH_SIZE=32
+    ports:
+      - "8005:8005"
+    networks:
+      default:
+        aliases:
+          - inception
+
+  inception-gpu:
+    container_name: inception-gpu
+    build:
+      context: ./inception
+      args:
+        TARGET_ENV: prod
+        BASE_IMAGE: nvidia/cuda:12.4.0-devel-ubuntu22.04
+        UV_SYNC_FLAGS: "-v"
+    image: inception-gpu
+    profiles: ["gpu", "cuda"]
+    environment:
+      - TRANSFORMER_MODEL_NAME=freelawproject/modernbert-embed-base_finetune_512
+      - MAX_BATCH_SIZE=32
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    ports:
+      - "8005:8005"
+    networks:
+      default:
+        aliases:
+          - inception
+
+  doctor:
+    container_name: doctor
+    build:
+      context: ./doctor
+      dockerfile: ./docker/Dockerfile
+    profiles: ["doctor", "demo"]
+    environment:
+      - DOCTOR_WORKERS=18
+    ports:
+      - "5050:5050"
+    networks:
+      - default
+
+  client:
+    container_name: inception-client
+    build: ./client
+    image: inception-demo-client
+    profiles: ["cli", "demo"]
+    env_file:
+      - ./client/.env
+    environment:
+      - INCEPTION_URL=http://inception:8005
+      - DOCTOR_URL=http://doctor:5050
+      - MISTRAL_OCR_API_KEY=${MISTRAL_OCR_API_KEY}
+    volumes:
+      - ./client/files:/app/files
+      - ./client/src:/app/src
+      - ./client/examples:/app/examples
+    depends_on:
+      - inception-cpu
+
+networks:
+  default:
