@@ -45,9 +45,9 @@ services:
     volumes:
       - ./client/files:/app/files
       - ./client/src:/app/src
-      - ./client/examples:/app/examples
-    depends_on:
-      - inception-cpu
-
+      - ./client/ocr:/app/ocr
+      - ./client/logs:/app/logs
+      - ./client/embeddings.json:/app/embeddings.json
+    
 networks:
   default:

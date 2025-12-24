@@ -13,7 +13,8 @@
     "commander": "^11.1.0",
     "dotenv": "^17.2.3",
     "glob": "^10.3.10",
-    "ora": "^9.0.0"
+    "ora": "^9.0.0",
+    "pdf-parse": "^2.4.5"
   },
   "devDependencies": {
     "bun-types": "latest"

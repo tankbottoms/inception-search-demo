@@ -1,22 +1,33 @@
 import fs from 'fs';
 import path from 'path';
 import chalk from 'chalk';
-import axios from 'axios'; // Keep for inception calls
+import axios from 'axios';
+import { extractPdfText, compareTextResults, type TextComparisonResult } from './pdf-utils';
 
 const INCEPTION_API = process.env.INCEPTION_URL || 'http://localhost:8005';
+const OCR_DIR = 'ocr';
+
+export interface ExtractTextResult {
+    text: string;
+    duration: number;
+    rawText?: string;
+    rawTextDuration?: number;
+    comparison?: TextComparisonResult;
+    pageCount?: number;
+}
 
 export async function waitForServices() {
-  let inceptionReady = false;
-  console.log("Waiting for services...");
-  while (!inceptionReady) {
-    try {
-      await axios.get(`${INCEPTION_API}/metrics`);
-      inceptionReady = true;
-      console.log("Inception is ready.");
-    } catch (e) {
-      await new Promise(r => setTimeout(r, 2000));
+    let inceptionReady = false;
+    console.log("[Services] Waiting for Inception...");
+    while (!inceptionReady) {
+        try {
+            await axios.get(`${INCEPTION_API}/metrics`);
+            inceptionReady = true;
+            console.log("[Services] Inception is ready.");
+        } catch (e) {
+            await new Promise(r => setTimeout(r, 2000));
+        }
     }
-  }
 }
 
 async function performMistralOCR(apiKey: string, buffer: Buffer, filename: string): Promise<string> {
@@ -59,41 +70,105 @@ async function performMistralOCR(apiKey: string, buffer: Buffer, filename: strin
 
     const ocrData = await ocrResponse.json() as { pages: { markdown: string }[] };
     if (ocrData && ocrData.pages) {
-        return ocrData.pages.map((page: any) => page.markdown || '').join('\n\n--- PAGE SEPARATOR ---\n\n');
+        return ocrData.pages.map((page: any) => page.markdown || '').join('\n\n---\n\n');
     }
 
     return "";
 }
 
-export async function extractText(filePath: string, apiKey: string): Promise<{text: string, duration: number}> {
+export async function extractText(filePath: string, apiKey: string): Promise<ExtractTextResult> {
     const startTime = performance.now();
     const filename = path.basename(filePath);
     const fileExt = path.extname(filename).toLowerCase();
-    
+
     const plainTextExtensions = ['.txt', '.md'];
+    const pdfExtensions = ['.pdf'];
 
     try {
+        // Plain text files - no OCR needed
         if (plainTextExtensions.includes(fileExt)) {
             const text = await fs.promises.readFile(filePath, 'utf-8');
             const duration = performance.now() - startTime;
             return { text, duration };
         }
 
+        // For PDFs, first try to extract embedded text
+        let rawText = '';
+        let rawTextDuration = 0;
+        let pageCount = 0;
+
+        if (pdfExtensions.includes(fileExt)) {
+            const rawStartTime = performance.now();
+            const pdfResult = await extractPdfText(filePath);
+            rawTextDuration = performance.now() - rawStartTime;
+            rawText = pdfResult.text;
+            pageCount = pdfResult.pageCount;
+
+            if (pdfResult.success && pdfResult.charCount > 0) {
+                console.log(chalk.dim(`  [PDF] Extracted ${pdfResult.charCount.toLocaleString()} chars from ${pageCount} pages (${rawTextDuration.toFixed(0)}ms)`));
+            }
+        }
+
+        // Perform Mistral OCR
+        const ocrStartTime = performance.now();
         const fileBuffer = await fs.promises.readFile(filePath);
-        const text = await performMistralOCR(apiKey, fileBuffer, filename);
-        const duration = performance.now() - startTime;
-        return { text, duration };
+        const ocrText = await performMistralOCR(apiKey, fileBuffer, filename);
+        const ocrDuration = performance.now() - ocrStartTime;
+
+        // Calculate comparison if we have raw text
+        const comparison = rawText.length > 0
+            ? compareTextResults(rawText, ocrText)
+            : undefined;
+
+        const totalDuration = performance.now() - startTime;
+
+        return {
+            text: ocrText,
+            duration: ocrDuration,
+            rawText: rawText || undefined,
+            rawTextDuration: rawTextDuration || undefined,
+            comparison,
+            pageCount: pageCount || undefined
+        };
 
     } catch (error) {
         const duration = performance.now() - startTime;
-        console.error(chalk.red(`\nError processing ${filename}:`));
+        console.error(chalk.red(`\n[ERROR] Processing ${filename}:`));
         if (error instanceof Error) {
-            console.error(chalk.red(`  - Error: ${error.message}`));
+            console.error(chalk.red(`  ${error.message}`));
         } else {
-            console.error(chalk.red(`  - Error: ${String(error)}`));
+            console.error(chalk.red(`  ${String(error)}`));
         }
         return { text: "", duration };
     }
+}
+
+export async function saveOcrMarkdown(originalFilePath: string, ocrText: string): Promise<string> {
+    // Ensure OCR directory exists
+    if (!fs.existsSync(OCR_DIR)) {
+        fs.mkdirSync(OCR_DIR, { recursive: true });
+    }
+
+    const originalFilename = path.basename(originalFilePath);
+    const baseName = originalFilename.replace(/\.[^.]+$/, '');
+    const ocrFilename = `${baseName}.ocr.md`;
+    const ocrFilePath = path.join(OCR_DIR, ocrFilename);
+
+    // Create markdown content with metadata header
+    const timestamp = new Date().toISOString();
+    const markdownContent = `---
+source_file: ${originalFilename}
+ocr_date: ${timestamp}
+character_count: ${ocrText.length}
+---
+
+# OCR Output: ${originalFilename}
+
+${ocrText}
+`;
+
+    await fs.promises.writeFile(ocrFilePath, markdownContent, 'utf-8');
+    return ocrFilePath;
 }
 
 export async function getDocumentEmbedding(text: string) {
@@ -101,12 +176,12 @@ export async function getDocumentEmbedding(text: string) {
         const response = await axios.post(`${INCEPTION_API}/api/v1/embed/text`, text, {
             headers: { 'Content-Type': 'text/plain' }
         });
-        return response.data; 
+        return response.data;
     } catch (error) {
         if (axios.isAxiosError(error)) {
-            let errorMsg = `Error getting doc embedding: ${error.message}.`;
+            let errorMsg = `[ERROR] Getting doc embedding: ${error.message}.`;
             if (error.response) {
-               errorMsg += ` Details: ${JSON.stringify(error.response.data)}`;
+                errorMsg += ` Details: ${JSON.stringify(error.response.data)}`;
             }
             throw new Error(errorMsg);
         }
@@ -119,7 +194,7 @@ export async function getQueryEmbedding(text: string) {
         const response = await axios.post(`${INCEPTION_API}/api/v1/embed/query`, { text });
         return response.data;
     } catch (error) {
-        console.error("Error getting query embedding:", error);
+        console.error("[ERROR] Getting query embedding:", error);
         throw error;
     }
 }

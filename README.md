@@ -2,97 +2,137 @@
 
 A complete document processing and semantic search system combining **Mistral OCR**, **Free Law Project Inception embeddings**, and **vector similarity search**.
 
+[Free Law Project Inception](https://github.com/freelawproject/inception/) provides a fine-tuned model based on their unprecedented database of legal documents. The transformer model is **freelawproject/modernbert-embed-base_finetune_512**. This repository demonstrates its capabilities on macOS M1 (CPU) and NVIDIA DGX Spark (GPU with CUDA).
+
+From the [Free Law Project Inception](https://github.com/freelawproject/inception/) documentation:
+
+> Inception is our microservice for generating embeddings from blocks of text.
+>
+> It is a high-performance FastAPI service that generates text embeddings using SentenceTransformers, specifically designed for processing legal documents and search queries. The service efficiently handles both short search queries and lengthy court opinions, generating semantic embeddings that can be used for document similarity matching and semantic search applications. It includes support for GPU acceleration when available.
+>
+> The service is optimized to handle two main use cases:
+>
+> - Embedding search queries: Quick, CPU-based processing for short search queries
+> - Embedding court opinions: NVIDIA CUDA GPU-accelerated processing for longer legal documents, with intelligent text chunking to maintain context
+
+
+## Quickstart
+
+Get up and running in under a minute.
+
+### Quick Start (3 Commands)
+
+```bash
+# 1. Configure environment
+cp .env.example .env
+# Edit .env and add your MISTRAL_OCR_API_KEY
+
+# 2. Build and start services
+docker compose build client && docker compose up -d inception-cpu
+
+# 3. Run full demo with all files
+docker compose run --rm client demo --pdf-count 0
+```
+
+### Individual Commands
+
+```bash
+# Build client image (required after code changes)
+docker compose build client
+
+# Start embedding server (Apple Silicon / ARM64)
+docker compose up -d inception-cpu
+
+# Start embedding server (NVIDIA GPU)
+docker compose --profile gpu up -d inception-gpu
+
+# Run demo with 1 file (quick test)
+docker compose run --rm client demo
+
+# Run demo with all files
+docker compose run --rm client demo --pdf-count 0
+
+# Run demo with custom query
+docker compose run --rm client demo --pdf-count 0 "securities fraud"
+
+# Check server status
+docker compose ps
+
+# View server logs
+docker compose logs -f inception-cpu
+
+# Stop all services
+docker compose down
+```
+
+### Automated Script
+
+```bash
+# Clone and run the demo
+git clone https://github.com/your-repo/inception-demo.git
+cd inception-demo
+cp .env.example .env
+# Edit .env and add your MISTRAL_OCR_API_KEY
+./test-docker-stack.sh
+```
+
+The script automatically detects your platform (Apple Silicon M1/M2/M3 or NVIDIA GPU) and runs the appropriate backend.
+
+
 ## Overview
 
 This demo showcases:
 
-- **Mistral OCR API** - Converts PDFs and images to markdown ($2 per 1,000 pages)
-- **Inception Embedding Service** - Generates vector embeddings using ModernBERT
-- **Semantic Search** - Find relevant content using cosine similarity
-- **Doctor Service** - Additional document processing capabilities
-- **CLI Tools** - Easy-to-use command-line interface
+- **Mistral OCR API** - Converts PDFs and images to markdown ($2 per 1,000 pages, requires API key)
+- **Inception Embedding Service** - Generates vector embeddings using ModernBERT (Docker service for CPU and GPU)
+- **Semantic Search** - Finds relevant content using cosine similarity
+- **Doctor Service** - Additional document processing capabilities from Free Law Project (untested)
+- **CLI Tools** - Simple command-line client application for demos
 
 ## Features
 
-- Multi-format OCR: PDFs, images, Office documents
-- Semantic Search: Context-aware document retrieval
-- GPU Support: CUDA 12.6+ acceleration for faster processing
-- Docker-based: Complete containerized stack
-- Automated Testing: Built-in test automation
+- **Multi-format OCR**: PDFs, images, Office documents (via Mistral)
+- **Semantic Search**: Context-aware document retrieval using a state-of-the-art fine-tuned model
+- **PDF Text Comparison**: Extracts embedded PDF text and compares with OCR output (similarity %)
+- **Docker-based**: Complete containerized stack
+- **Platform Detection**: Automatic selection of CPU or GPU backend (Apple Silicon, NVIDIA)
+- **OCR Export**: Saves OCR output as `.ocr.md` markdown files
+- **Benchmark Statistics**: Detailed timing, performance metrics, and system detection
+- **Privacy-Safe Benchmarks**: File names hashed with SHA256 for sharing
 
-## Quickstart
 
-### Prerequisites
+## Prerequisites
 
-- [Docker](https://www.docker.com/) & [Docker Compose](https://docs.docker.com/compose/)
-- [Bun](https://bun.sh/) (for running tests)
-- Mistral API Key (get one at [https://console.mistral.ai](https://console.mistral.ai))
+- [Docker](https://www.docker.com/) and [Docker Compose](https://docs.docker.com/compose/)
+- [Bun](https://bun.sh/) (optional, for local development)
+- Mistral API Key (get one at [https://mistral.ai](https://mistral.ai))
 
-### 1. Configure Environment
-
-Create `.env` in the project root:
-
-```bash
-cp .env.example .env
-# Edit .env and add your Mistral API key
-```
-
-Or create it manually:
-
-```bash
-echo "MISTRAL_OCR_API_KEY=your-api-key-here" > .env
-```
-
-### 2. Run the Demo
-
-The test script validates everything works end-to-end:
-
-```bash
-# CPU mode (default)
-./tests/test-docker-stack.sh
-
-# GPU mode (requires NVIDIA GPU with CUDA 12.6+)
-PROFILE=gpu ./tests/test-docker-stack.sh
-```
-
-The script will:
-1. **Test Mistral OCR API** - Validates your API key works
-2. **Build Docker images** - Creates inception-cpu/gpu and client images
-3. **Start services** - Launches the embedding service
-4. **Run demo** - Index sample files and search for "securities fraud"
-5. **Show results** - Display search results with similarity scores
-6. **Clean up** - Stop and remove containers
-
-### 3. Quick Test (API Only)
-
-To test just the Mistral OCR API without Docker:
-
-```bash
-cd client && bun install && cd ..
-bun run tests/test-mistral-ocr.ts
-```
 
 ## Usage
 
 ### Command Reference
 
-The CLI provides four main commands:
+The CLI provides four main commands.
 
 #### 1. `demo` - Run Full Demo
 
-Index all files in `files/` directory and perform a semantic search.
+Index files in the `files/` directory and perform a semantic search.
 
 ```bash
-# Default: search for "securities fraud" in all files
+# Default: index 1 random file and search for "fraud"
 docker compose run --rm client demo
 
-# Add a new file and use custom query
-docker compose run --rm client demo /path/to/document.pdf "custom query"
+# Index all files (use --pdf-count 0)
+docker compose run --rm client demo --pdf-count 0
 
-# Local development
-cd client
-bun run src/index.ts demo
+# Custom file count and query
+docker compose run --rm client demo --pdf-count 5 "securities fraud"
+
+# Add a specific file to the demo
+docker compose run --rm client demo /path/to/document.pdf "custom query"
 ```
+
+The demo extracts embedded PDF text before OCR and displays comparison statistics showing how similar the raw text is to the OCR output.
 
 #### 2. `index` - Index Documents
 
@@ -102,20 +142,25 @@ Index a single file or directory of documents.
 # Index a single PDF
 docker compose run --rm client index "files/document.pdf"
 
-# Index entire directory
+# Index entire directory (all files)
 docker compose run --rm client index "files/"
+
+# Index only 5 random files from directory
+docker compose run --rm client index "files/" --pdf-count 5
 
 # Local development
 cd client
 export MISTRAL_OCR_API_KEY="your-key"
-bun run src/index.ts index "files/"
+bun run src/index.ts index "files/" --pdf-count 3
 ```
 
 **Supported formats**: PDF, PNG, JPG, DOCX, PPTX, TXT, MD
 
+See [Mistral OCR Documentation](https://docs.mistral.ai/capabilities/document_ai/basic_ocr) for details.
+
 #### 3. `search` - Search Indexed Documents
 
-Search previously indexed documents.
+Search previously indexed documents using semantic similarity.
 
 ```bash
 # Search existing index
@@ -137,32 +182,131 @@ docker compose run --rm client run "files/report.pdf" "key findings"
 docker compose run --rm client run "/tmp/document.pdf" "search term"
 ```
 
+
+## Benchmarking
+
+The demo includes comprehensive benchmarking to compare performance across different systems.
+
+### Running Benchmarks
+
+```bash
+# Run demo with benchmarking (default: 1 file for quick test)
+docker compose run --rm client demo
+
+# Run with more files for accurate benchmarks
+docker compose run --rm client demo --pdf-count 5
+
+# Run with all files
+docker compose run --rm client demo --pdf-count 0
+
+# Skip saving benchmark (--no-save)
+docker compose run --rm client demo --no-save
+```
+
+### Benchmark Output
+
+Each demo run outputs:
+
+- **System Information**: Platform (with Docker detection), CPU model, cores, memory, GPU
+- **Sample Summary**: Files processed, total size, pages, characters, chunks
+- **Timing Summary**: Total duration, OCR time, embedding time (with percentages)
+- **OCR Performance**: Average/fastest/slowest times, throughput (chars/sec)
+- **Embedding Performance**: Average/fastest/slowest times, chars/sec, tokens/sec
+- **Time Projections**: Estimated time per 100/1000 chars, per 1MB/100MB/1GB
+- **Text Comparison**: Raw PDF text vs OCR output with similarity percentage
+- **Per-File Details**: Hash, size, pages, raw chars, OCR chars, similarity, embed time, chunks
+
+### Comparing Systems
+
+After running benchmarks on multiple machines, compare results:
+
+```bash
+# Analyze all sessions in logs/
+docker compose run --rm client benchmark
+
+# Or analyze a specific folder
+docker compose run --rm client benchmark /path/to/logs
+```
+
+The analyzer outputs:
+
+- Session overview with unique systems detected
+- Performance comparison table
+- Rankings (fastest OCR, fastest embedding, fastest overall)
+- Speedup ratios between best and worst performers
+- System-specific analysis when multiple systems detected
+- Recommendations for optimization
+
+### Session Files
+
+Benchmark sessions are saved to `logs/` with format `YYYYMMDD-HHMMSS.json`:
+
+```json
+{
+  "sessionId": "20251224-170213",
+  "system": {
+    "platform": "linux (Docker)",
+    "arch": "arm64",
+    "cpuModel": "Apple Silicon (via Docker)",
+    "cpuCores": 10,
+    "totalMemoryGB": 32,
+    "gpuAvailable": true,
+    "gpuInfo": "Apple Silicon GPU (host)"
+  },
+  "stats": {
+    "totalFiles": 5,
+    "totalSizeMB": 25.5,
+    "embedAvgCharsPerSecond": 15000
+  },
+  "files": [
+    {
+      "fileHash": "7f3153875783d430",
+      "fileSizeMB": 3.1,
+      "pageCount": 6,
+      "rawTextChars": 9034,
+      "ocrOutputChars": 8375,
+      "textSimilarityPercent": 88.6,
+      "ocrDurationMs": 5370,
+      "embedDurationMs": 4620,
+      "chunkCount": 5
+    }
+  ]
+}
+```
+
+File names are replaced with SHA256 hashes for privacy when sharing benchmarks. See `client/benchmark-format.md` for the complete JSON schema.
+
+
 ## Automated Testing
 
 ### test-docker-stack.sh
 
-Comprehensive test script with multiple modes:
+Comprehensive test script with automatic platform detection.
 
 ```bash
-# Run default demo
+# Run default demo (auto-detects platform)
 ./test-docker-stack.sh
 
 # Test with specific file
 TEST_FILE="path/to/file.pdf" TEST_QUERY="securities fraud" ./test-docker-stack.sh
 
-# Use GPU profile
-PROFILE=gpu ./test-docker-stack.sh
+# Force GPU profile
+PROFILE_OVERRIDE=gpu ./test-docker-stack.sh
 
 # Custom command
 TEST_MODE=custom CUSTOM_COMMAND="search 'fraud'" ./test-docker-stack.sh
 ```
 
 **Environment Variables:**
-- `PROFILE` - Docker profile: `default`, `gpu`, or `demo` (default: `default`)
-- `TEST_MODE` - Test mode: `demo`, `single`, or `custom` (default: `demo`)
-- `TEST_FILE` - File to test (for `single` mode)
-- `TEST_QUERY` - Search query (default: "securities fraud")
-- `CUSTOM_COMMAND` - Custom CLI command (for `custom` mode)
+
+| Variable | Description | Default |
+| --- | --- | --- |
+| `PROFILE_OVERRIDE` | Force Docker profile: `default`, `gpu`, or `cuda` | auto-detect |
+| `TEST_MODE` | Test mode: `demo`, `single`, or `custom` | `demo` |
+| `TEST_FILE` | File to test (for `single` mode) | - |
+| `TEST_QUERY` | Search query | `securities fraud` |
+| `CUSTOM_COMMAND` | Custom CLI command (for `custom` mode) | - |
+
 
 ## Architecture
 
@@ -189,23 +333,27 @@ TEST_MODE=custom CUSTOM_COMMAND="search 'fraud'" ./test-docker-stack.sh
 ### Data Flow
 
 ```
-                   PDF/Image → Mistral OCR API → Markdown
-                                       ↓
-                    Inception Service → Vector Embeddings
-                                       ↓
-                                 Local JSON Index
-                                       ↓
-                     Semantic Search (Cosine Similarity)
+PDF/Image --> Mistral OCR API --> Markdown
+                    |
+                    v
+         Inception Service --> Vector Embeddings
+                    |
+                    v
+              Local JSON Index
+                    |
+                    v
+         Semantic Search (Cosine Similarity)
 ```
+
 
 ## Docker Profiles
 
 ```bash
-# CPU-based (default, M1/M2 Mac compatible)
-docker compose up -d
+# CPU-based (default, M1/M2/M3 Mac compatible)
+docker compose up -d inception-cpu
 
 # GPU-accelerated (requires NVIDIA GPU)
-docker compose --profile gpu up -d
+docker compose --profile gpu up -d inception-gpu
 
 # Full demo stack (Inception + Doctor + Client)
 docker compose --profile demo up -d
@@ -214,28 +362,33 @@ docker compose --profile demo up -d
 docker compose --profile doctor up -d doctor
 ```
 
+
 ## Development
 
 ### Local Setup
 
 1. Start services:
+
    ```bash
    docker compose up -d inception-cpu
    ```
 
 2. Install client dependencies:
+
    ```bash
    cd client
    bun install
    ```
 
 3. Set environment variables:
+
    ```bash
    export MISTRAL_OCR_API_KEY="your-key"
    export INCEPTION_URL="http://localhost:8005"
    ```
 
 4. Run commands:
+
    ```bash
    bun run src/index.ts demo
    ```
@@ -244,12 +397,12 @@ docker compose --profile doctor up -d doctor
 
 Located in `tests/` directory:
 
-- `test-docker-stack.sh` - Full end-to-end test of Docker stack
+- `test-docker-stack.sh` - Full end-to-end test of Docker stack (also available at root)
 - `test-mistral-ocr.ts` - Test Mistral OCR API standalone
 
 ```bash
-# Test full Docker stack
-./tests/test-docker-stack.sh
+# Test full Docker stack (from root)
+./test-docker-stack.sh
 
 # Test Mistral OCR API only
 bun run tests/test-mistral-ocr.ts
@@ -258,24 +411,27 @@ bun run tests/test-mistral-ocr.ts
 bun run tests/test-mistral-ocr.ts "client/files/sample.pdf"
 ```
 
+
 ## Configuration
 
 ### Environment Variables
 
-**Project Root (`.env`):**
-```bash
-# Required - Mistral OCR API key
-MISTRAL_OCR_API_KEY=your-key-here
-```
+Create a `.env` file in the project root (see `.env.example`):
 
-**Docker Compose:**
-- `TRANSFORMER_MODEL_NAME` - Embedding model (default: modernbert)
-- `MAX_BATCH_SIZE` - Batch size for embeddings (default: 32)
-- `DOCTOR_WORKERS` - Number of doctor workers (default: 18)
+```bash
+# Required
+MISTRAL_OCR_API_KEY=your-key-here
+
+# Optional
+INCEPTION_URL=http://localhost:8005
+TRANSFORMER_MODEL_NAME=freelawproject/modernbert-embed-base_finetune_512
+MAX_BATCH_SIZE=32
+DOCTOR_WORKERS=18
+```
 
 ### Inception Service
 
-Edit `docker-compose.yml` to change:
+Edit `docker-compose.yml` to change settings:
 
 ```yaml
 environment:
@@ -283,29 +439,41 @@ environment:
   - MAX_BATCH_SIZE=64
 ```
 
+
 ## Performance
 
 ### OCR Speed (Mistral API)
-- Small PDFs (< 5 pages): 5-10 seconds
-- Medium PDFs (5-20 pages): 15-30 seconds
-- Large PDFs (20+ pages): 30+ seconds
+
+| Document Size | Processing Time |
+| --- | --- |
+| Small PDFs (< 5 pages) | 5-10 seconds |
+| Medium PDFs (5-20 pages) | 15-30 seconds |
+| Large PDFs (20+ pages) | 30+ seconds |
 
 ### Embedding Speed (Inception)
-- CPU: 1-2 seconds per chunk
-- GPU: 0.1-0.5 seconds per chunk
+
+| Hardware | Time per Chunk |
+| --- | --- |
+| CPU (Apple Silicon) | 1-2 seconds |
+| GPU (NVIDIA CUDA) | 0.1-0.5 seconds |
 
 ### Search Speed
+
 - Instant for < 1,000 chunks
-- < 1 second for 10,000+ chunks
+- Less than 1 second for 10,000+ chunks
+
 
 ## Costs
 
 ### Mistral OCR
+
 - **Standard**: $2 per 1,000 pages
 - **Batch API**: $1 per 1,000 pages (50% discount)
 
 ### Inception Service
+
 - **Self-hosted**: Free (requires CPU/GPU hardware)
+
 
 ## Troubleshooting
 
@@ -326,15 +494,17 @@ docker compose restart
 ### OCR Failures
 
 **Error**: "Upload failed" or "Invalid file format"
-- Verify file is valid PDF/image
+
+- Verify the file is a valid PDF or image
 - Check file size (max 50MB, 1000 pages)
-- Ensure API key is set correctly
+- Ensure the API key is set correctly
 
 ### Embedding Errors
 
 **Error**: "Connection refused"
-- Ensure Docker service is running
-- Check port 8005 is available
+
+- Ensure the Docker service is running
+- Check that port 8005 is available
 - Wait 1-2 minutes for model loading
 
 ### No Search Results
@@ -343,28 +513,44 @@ docker compose restart
 - Re-index documents
 - Try different search queries
 
+
 ## File Structure
 
 ```
 inception-demo/
-├── .env                   # Environment variables (API keys) - create from .env.example
-├── .env.example           # Example environment file
-├── client/                # TypeScript/Bun CLI
-│   ├── files/             # Document storage
+├── client/                     # TypeScript/Bun CLI
+│   ├── files/                  # Document storage (PDFs renamed to SHA256 hashes)
+│   │   └── filename-mapping.json  # Original filename mapping
+│   ├── ocr/                    # OCR output (.ocr.md files)
+│   ├── logs/                   # Benchmark session JSON files
 │   ├── src/
-│   │   ├── index.ts       # CLI commands
-│   │   └── api.ts         # OCR and embedding functions
-│   └── embeddings.json    # Vector index (generated)
-├── inception/             # Python embedding service
-├── doctor/                # Document processing service
-├── tests/                 # Test scripts
+│   │   ├── index.ts            # CLI commands
+│   │   ├── api.ts              # OCR and embedding functions
+│   │   ├── pdf-utils.ts        # PDF text extraction and comparison
+│   │   ├── types.ts            # TypeScript type definitions
+│   │   ├── benchmark.ts        # Benchmark analyzer
+│   │   ├── benchmark-utils.ts  # Benchmark utilities and system detection
+│   │   └── rename-to-hash.ts   # Utility to rename files to SHA256 hashes
+│   ├── benchmark-format.md     # Benchmark JSON schema documentation
+│   └── embeddings.json         # Vector index (generated)
+├── inception/                  # Python embedding service
+├── doctor/                     # Document processing service
+├── tests/                      # Test scripts
 │   ├── test-docker-stack.sh    # Full Docker stack test
 │   └── test-mistral-ocr.ts     # Mistral OCR API test
-├── docker-compose.yml     # Service orchestration
-└── README.md              # This file
+├── .env                        # Environment variables (create from .env.example)
+├── .env.example                # Example environment configuration
+├── docker-compose.yml          # Service orchestration
+├── start-inception.sh          # Platform-aware startup script
+├── test-docker-stack.sh        # Automated testing (symlink to tests/)
+├── CHANGELOG.md                # Version history
+└── README.md                   # This file
 ```
 
+
 ## GPU Support
+
+> **Note**: GPU support is currently not working and will be addressed in a future update. Use the CPU version (`inception-cpu`) for now.
 
 ### Requirements
 
@@ -382,7 +568,7 @@ docker compose --profile gpu build inception-gpu
 docker compose --profile gpu up -d inception-gpu
 
 # Test with GPU
-PROFILE=gpu ./tests/test-docker-stack.sh
+PROFILE_OVERRIDE=gpu ./test-docker-stack.sh
 ```
 
 ### Verify GPU Access
@@ -391,9 +577,10 @@ PROFILE=gpu ./tests/test-docker-stack.sh
 docker compose exec inception-gpu nvidia-smi
 ```
 
+
 ## CI/CD Integration
 
-The `tests/test-docker-stack.sh` script is designed for CI/CD:
+The `test-docker-stack.sh` script is designed for CI/CD:
 
 ```yaml
 # Example GitHub Actions
@@ -402,8 +589,9 @@ The `tests/test-docker-stack.sh` script is designed for CI/CD:
     MISTRAL_OCR_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
   run: |
     echo "MISTRAL_OCR_API_KEY=$MISTRAL_OCR_API_KEY" > .env
-    ./tests/test-docker-stack.sh
+    ./test-docker-stack.sh
 ```
+
 
 ## Resources
 
@@ -412,12 +600,15 @@ The `tests/test-docker-stack.sh` script is designed for CI/CD:
 - **ModernBERT Model**: [https://huggingface.co/freelawproject/modernbert-embed-base_finetune_512](https://huggingface.co/freelawproject/modernbert-embed-base_finetune_512)
 - **Free Law Project**: [https://free.law/2025/03/11/semantic-search/](https://free.law/2025/03/11/semantic-search/)
 
+
 ## License
 
 See individual component licenses:
+
 - Inception: Check [inception/LICENSE](inception/LICENSE)
 - Doctor: Check [doctor/LICENSE](doctor/LICENSE)
 - Client: MIT License
+
 
 ## Contributing
 
@@ -427,9 +618,11 @@ See individual component licenses:
 4. Test with `./test-docker-stack.sh`
 5. Submit a pull request
 
+
 ## Support
 
 For issues and questions:
+
 - Mistral API: [https://docs.mistral.ai](https://docs.mistral.ai)
 - Inception: [https://github.com/freelawproject/inception/issues](https://github.com/freelawproject/inception/issues)
 - This Demo: Open an issue in this repository
