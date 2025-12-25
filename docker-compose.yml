@@ -1,53 +1,126 @@
+# Inception ONNX - Docker Compose Configuration
+# Multi-platform inference service with CPU and GPU support
+
 services:
-  inception-cpu:
+  # TypeScript backend - CPU (Apple Silicon, generic ARM64)
+  backend-cpu:
     container_name: inception-cpu
     build:
-      context: ./inception
-      args:
-        TARGET_ENV: dev
-        BASE_IMAGE: ubuntu:24.04
-        UV_SYNC_FLAGS: "-v"
-    image: inception-cpu
-    profiles: ["m1", "cpu", "default", "demo"]
+      context: .
+      dockerfile: Dockerfile
+    profiles: ["cpu", "default", "demo"]
     environment:
-      - TRANSFORMER_MODEL_NAME=freelawproject/modernbert-embed-base_finetune_512
-      - MAX_BATCH_SIZE=32
+      - PORT=8005
+      - EXECUTION_PROVIDER=cpu
+      - MODEL_REGISTRY=/models/registry.json
+      - CONVERTER_URL=http://converter:8010
+      - LOG_LEVEL=info
+      - ENABLE_METRICS=true
+    env_file:
+      - .env
+    volumes:
+      - ./models:/models
     ports:
       - "8005:8005"
     networks:
       default:
         aliases:
           - inception
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8005/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
 
-  doctor:
-    container_name: doctor
+  # TypeScript backend - GPU (DGX Spark, NVIDIA CUDA)
+  backend-gpu:
+    container_name: inception-gpu
     build:
-      context: ./doctor
-      dockerfile: ./docker/Dockerfile
-    profiles: ["doctor", "demo"]
+      context: .
+      dockerfile: Dockerfile.cuda
+    profiles: ["gpu", "cuda", "spark"]
     environment:
-      - DOCTOR_WORKERS=18
+      - PORT=8005
+      - EXECUTION_PROVIDER=cuda
+      - MODEL_REGISTRY=/models/registry.json
+      - CONVERTER_URL=http://converter:8010
+      - LOG_LEVEL=info
+      - ENABLE_METRICS=true
+    env_file:
+      - .env
+    volumes:
+      - ./models:/models
     ports:
-      - "5050:5050"
+      - "8005:8005"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    networks:
+      default:
+        aliases:
+          - inception
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8005/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # Python ONNX conversion service (on-demand)
+  converter:
+    container_name: inception-converter
+    build:
+      context: ./converter
+    profiles: ["convert", "full"]
+    environment:
+      - PORT=8010
+      - MODELS_DIR=/models
+    volumes:
+      - ./models:/models
+    ports:
+      - "8010:8010"
+
+  # Demo client
+  demo:
+    container_name: inception-demo
+    build:
+      context: ./demo
+    profiles: ["demo"]
+    depends_on:
+      backend-cpu:
+        condition: service_healthy
+    environment:
+      - INCEPTION_URL=http://inception:8005
+    env_file:
+      - .env
+    volumes:
+      - ./demo/files:/app/files
+      - ./demo/output:/app/output
+      - ./demo/logs:/app/logs
     networks:
       - default
 
-  client:
-    container_name: inception-client
-    build: ./client
-    image: inception-demo-client
-    profiles: ["cli", "demo"]
-    env_file:
-      - ./.env
+  # Legacy Python backend (for comparison)
+  inception-legacy:
+    container_name: inception-legacy
+    build:
+      context: ./backup/inception
+      args:
+        TARGET_ENV: dev
+        BASE_IMAGE: ubuntu:24.04
+        UV_SYNC_FLAGS: "-v"
+    profiles: ["legacy", "python"]
     environment:
-      - INCEPTION_URL=http://inception:8005
-      - DOCTOR_URL=http://doctor:5050
-    volumes:
-      - ./client/files:/app/files
-      - ./client/src:/app/src
-      - ./client/ocr:/app/ocr
-      - ./client/logs:/app/logs
-      - ./client/embeddings.json:/app/embeddings.json
-    
+      - TRANSFORMER_MODEL_NAME=freelawproject/modernbert-embed-base_finetune_512
+      - MAX_BATCH_SIZE=32
+    ports:
+      - "8006:8005"
+
 networks:
   default:
+    driver: bridge

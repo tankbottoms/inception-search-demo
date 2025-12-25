@@ -1,0 +1,74 @@
+[project]
+name = "doctor"
+version = "0.3.5"
+description = "CourtListener doctor"
+requires-python = ">=3.10"
+dependencies = [
+  "certifi",
+  "chardet>=3.0.4",
+  "django>=3.2,<4",
+  "django-environ>=0.8.1",
+  "eyed3",
+  "gunicorn==20.1",
+  "idna==2.10",
+  "img2pdf",
+  "lxml>=4.5.2",
+  "lxml-html-clean",
+  "magika>=0.6.2",
+  "numpy>=1.19.1",
+  "opencv-python>=4.2.0.32",
+  "pandas>=1.1.1",
+  "pdf2image>=1.7.1",
+  "pdfplumber",
+  "pillow>=8.0.1",
+  "pkginfo==1.5.0.1",
+  "pypdf2[crypto]",
+  "pytesseract>=0.3.5",
+  "python-magic",
+  "reportlab",
+  "requests>=2.25",
+  "seal-rookery>=2.2.1",
+  "sentry-sdk",
+  "setuptools==59.6.0",
+  "six>=1.15",
+  "urllib3>=1.25.10",
+  "x-ray==0.3.5",
+]
+
+[dependency-groups]
+dev = [
+  "ipython",
+]
+
+[tool.ruff]
+line-length = 79
+lint.select = [
+  # flake8-bugbear
+  "B",
+  # flake8-comprehensions
+  "C4",
+  # pycodestyle
+  "E",
+  # Pyflakes errors
+  "F",
+  # isort
+  "I",
+  # flake8-simplify
+  "SIM",
+  # flake8-tidy-imports
+  "TID",
+  # pyupgrade
+  "UP",
+  # Pyflakes warnings
+  "W",
+]
+lint.ignore = [
+  # flake8-bugbear opinionated rules
+  "B9",
+  # line-too-long
+  "E501",
+  # suppressible-exception
+  "SIM105",
+  # if-else-block-instead-of-if-exp
+  "SIM108",
+]

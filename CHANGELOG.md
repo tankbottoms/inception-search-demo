@@ -2,7 +2,35 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased]
+## [Unreleased] - feature/onnx-typescript-backend
+
+### Added
+
+- New TypeScript/Bun inference backend using ONNX Runtime
+- Multi-platform support: ARM64 CPU (Apple Silicon) and ARM64 + CUDA (DGX Spark)
+- Model registry system with JSON configuration (`models/registry.json`)
+- Hardware auto-detection for execution provider selection
+- Python ONNX conversion service (fallback for models without ONNX on HuggingFace)
+- CLI modes: `--check` for model validation, `--benchmark` for performance comparison
+- vLLM distributed inference configuration for dual DGX Spark nodes
+- Comprehensive instrumentation and benchmark reporting
+- OCR providers: Mistral API, DeepSeek-OCR, HunyuanOCR
+- Output files: `{hash}.ocr.md` and `{hash}.bert.json` naming convention
+
+### Changed
+
+- Moved original Python/FastAPI implementation to `backup/` folder
+- Restructured project for TypeScript-first development
+- New directory structure with `src/`, `demo/`, `converter/`, `vllm/`
+
+### Technical Details
+
+- Backend: Hono (TypeScript) + ONNX Runtime
+- Tokenization: Transformers.js
+- Model: freelawproject/modernbert-embed-base_finetune_512 (768-dim embeddings)
+- Pooling: Mean pooling with L2 normalization
+
+---
 
 ## [2025-12-24] - Search Quality & Cleanup
 

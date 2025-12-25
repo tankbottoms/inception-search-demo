@@ -1,0 +1,15 @@
+services:
+  doctor:
+    container_name: doctor
+    build:
+      dockerfile: docker/Dockerfile
+      context: .
+      args:
+        options: --reload
+    image: freelawproject/doctor:latest
+    ports:
+      - 5050:5050
+    volumes:
+      - .:/opt/app
+    env_file:
+      - .env.dev

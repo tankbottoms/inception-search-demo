@@ -1,0 +1,26 @@
+name: Tests
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Create the .env settings file
+      run: cp .env.example .env.dev
+
+    - name: Update .env.dev file
+      run: |
+        echo 'DEBUG=on' >> .env.dev
+
+    - name: Build Image
+      run: docker compose up --build -d
+
+    - name: Run tests
+      run: docker compose exec doctor python -m unittest

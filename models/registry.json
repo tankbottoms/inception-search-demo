@@ -1,0 +1,48 @@
+{
+  "version": "1.0",
+  "cache_dir": "/models",
+  "models": [
+    {
+      "id": "modernbert-embed",
+      "name": "freelawproject/modernbert-embed-base_finetune_512",
+      "type": "embedding",
+      "enabled": true,
+      "config": {
+        "max_tokens": 512,
+        "embedding_dim": 768,
+        "pooling": "mean",
+        "normalize": true,
+        "query_prefix": "search_query: ",
+        "document_prefix": "search_document: "
+      }
+    },
+    {
+      "id": "deepseek-ocr",
+      "name": "deepseek-ai/DeepSeek-OCR",
+      "type": "ocr",
+      "enabled": true,
+      "config": {
+        "max_image_size": 4096
+      }
+    },
+    {
+      "id": "hunyuan-ocr",
+      "name": "tencent/HunyuanOCR",
+      "type": "ocr",
+      "enabled": true,
+      "config": {
+        "max_image_size": 4096
+      }
+    },
+    {
+      "id": "gpt-oss",
+      "name": "gpt-oss:20b",
+      "type": "inference",
+      "enabled": false,
+      "status": "planned",
+      "config": {
+        "max_tokens": 131072
+      }
+    }
+  ]
+}

@@ -1,0 +1,70 @@
+# Inception ONNX - CUDA Build
+# TypeScript/Bun inference backend with ONNX Runtime + CUDA
+
+FROM nvidia/cuda:12.6.3-runtime-ubuntu24.04 AS base
+
+# Install Bun and dependencies
+RUN apt-get update && apt-get install -y \
+    curl \
+    unzip \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Bun
+RUN curl -fsSL https://bun.sh/install | bash
+ENV PATH="/root/.bun/bin:$PATH"
+
+WORKDIR /app
+
+# Install dependencies
+FROM base AS deps
+COPY package.json bun.lockb* ./
+# Use onnxruntime-gpu instead of onnxruntime-node for CUDA support
+RUN sed -i 's/onnxruntime-node/onnxruntime-gpu/g' package.json || true
+RUN bun install --frozen-lockfile || bun install
+
+# Build stage
+FROM base AS build
+COPY --from=deps /app/node_modules ./node_modules
+COPY . .
+RUN bun run build || true
+
+# Production stage
+FROM nvidia/cuda:12.6.3-runtime-ubuntu24.04 AS runner
+
+# Install runtime dependencies
+RUN apt-get update && apt-get install -y \
+    curl \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Bun
+RUN curl -fsSL https://bun.sh/install | bash
+ENV PATH="/root/.bun/bin:$PATH"
+
+WORKDIR /app
+
+ENV NODE_ENV=production
+ENV PORT=8005
+ENV EXECUTION_PROVIDER=cuda
+ENV MODEL_REGISTRY=/models/registry.json
+ENV LOG_LEVEL=info
+
+# CUDA environment
+ENV NVIDIA_VISIBLE_DEVICES=all
+ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility
+
+# Copy built application
+COPY --from=deps /app/node_modules ./node_modules
+COPY --from=build /app/src ./src
+COPY --from=build /app/package.json ./
+
+# Create models directory
+RUN mkdir -p /models
+
+EXPOSE 8005
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+  CMD curl -f http://localhost:8005/health || exit 1
+
+CMD ["bun", "run", "src/index.ts"]
