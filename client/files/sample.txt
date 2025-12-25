@@ -1,5 +1,0 @@
-This is a sample legal text for testing the Inception embedding service.
-
-Copyright law protects original works of authorship including literary, dramatic, musical, and artistic works, such as poetry, novels, movies, songs, computer software, and architecture.
-The duration of copyright protection depends on several factors, including whether the work has been published and, if so, the date of first publication.
-Fair use is a legal doctrine that promotes freedom of expression by permitting the unlicensed use of copyright-protected works in certain circumstances, such as criticism, comment, news reporting, teaching, scholarship, and research.

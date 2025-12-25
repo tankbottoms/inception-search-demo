@@ -68,7 +68,16 @@ test_output/
 embeddings.json
 client/embeddings.json
 *_ocr.md
+*.ocr.md
+client/ocr/*.ocr.md
+client/logs/*.json
+!client/logs/benchmark-summary.json
+!client/logs/.gitkeep
+!client/ocr/.gitkeep
 *.output
+
+# Test scripts
+client/src/test-*.ts
 
 # Temporary files
 *.tmp
@@ -139,3 +148,6 @@ tasks/
 
 .claude
 .claude/settings.local.json
+.osgrep
+# Large files (>50MB) - use Git LFS if needed
+client/files/ef231bdd2d571422.pdf
