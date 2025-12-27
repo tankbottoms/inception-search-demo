@@ -71,7 +71,7 @@ services:
       retries: 3
       start_period: 60s
 
-  # Python ONNX conversion service (on-demand)
+  # Python ONNX conversion service (auto-converts on startup)
   converter:
     container_name: inception-converter
     build:
@@ -80,10 +80,18 @@ services:
     environment:
       - PORT=8010
       - MODELS_DIR=/models
+      - AUTO_CONVERT=true
+      - HF_HOME=/models/.cache/huggingface
     volumes:
       - ./models:/models
     ports:
       - "8010:8010"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8010/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
 
   # Demo client
   demo:

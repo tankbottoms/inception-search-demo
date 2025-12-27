@@ -1,0 +1,40 @@
+# Traefik Dynamic Configuration
+# Load balancing for ModernBERT embedding replicas
+#
+# Endpoints:
+#   - http://localhost:8000/v1/embeddings  (load balanced)
+#   - http://localhost:8000/v1/models      (load balanced)
+#   - http://localhost:8000/health         (load balanced)
+
+http:
+  # Routers
+  routers:
+    embeddings:
+      rule: "PathPrefix(`/`)"
+      entryPoints:
+        - embeddings
+      service: embeddings-lb
+      middlewares:
+        - retry
+
+  # Services with load balancing
+  services:
+    embeddings-lb:
+      loadBalancer:
+        # Round-robin by default
+        healthCheck:
+          path: /health
+          interval: 10s
+          timeout: 3s
+        servers:
+          # vLLM containers use host networking, so use host.docker.internal
+          - url: "http://host.docker.internal:8001"
+          - url: "http://host.docker.internal:8002"
+        passHostHeader: false
+
+  # Middlewares
+  middlewares:
+    retry:
+      retry:
+        attempts: 2
+        initialInterval: 100ms

@@ -1,0 +1,22 @@
+# Python GPU Inference Service Dependencies
+# Core
+fastapi>=0.109.0
+uvicorn[standard]>=0.27.0
+python-multipart>=0.0.6
+
+# ONNX Runtime with GPU support
+onnxruntime-gpu>=1.17.0
+
+# Model conversion and tokenization
+transformers>=4.37.0
+optimum[onnxruntime]>=1.16.0
+tokenizers>=0.15.0
+
+# Utilities
+numpy>=1.24.0
+pydantic>=2.5.0
+python-dotenv>=1.0.0
+httpx>=0.26.0
+
+# Metrics
+prometheus-client>=0.19.0

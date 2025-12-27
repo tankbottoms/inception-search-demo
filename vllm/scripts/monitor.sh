@@ -6,6 +6,16 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VLLM_DIR="$(dirname "$SCRIPT_DIR")"
 
+# Load environment
+cd "$VLLM_DIR"
+if [ -f ".env" ]; then
+    export $(grep -v '^#' .env | xargs)
+fi
+
+# Configuration
+SPARK1_IP="${SPARK1_IP:-192.168.100.10}"
+EMBEDDINGS_PORT="${EMBEDDINGS_PORT:-8001}"
+
 CRON_MODE=false
 WATCH_MODE=false
 
@@ -30,27 +40,27 @@ check_health() {
   local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
 
   # Check if containers are running
-  SPARK1_STATUS=$(docker compose -f "$VLLM_DIR/docker-compose.spark-1.yml" ps --format json 2>/dev/null | jq -r '.[0].State' 2>/dev/null || echo "stopped")
-  SPARK2_STATUS=$(ssh rooot@spark-2 "docker ps --filter name=vllm-worker --format '{{.State}}'" 2>/dev/null || echo "stopped")
+  SPARK1_STATUS=$(docker compose ps --format json 2>/dev/null | jq -r '.[0].State' 2>/dev/null || echo "stopped")
+  SPARK2_STATUS=$(ssh "${SPARK2_HOST:-rooot@spark-2}" "docker ps --filter name=ray-worker --format '{{.State}}'" 2>/dev/null || echo "stopped")
 
-  # Check vLLM API health
-  VLLM_HEALTH=$(curl -s -o /dev/null -w "%{http_code}" http://spark-1:8000/health 2>/dev/null || echo "000")
+  # Check vLLM API health (embeddings service)
+  VLLM_HEALTH=$(curl -s -o /dev/null -w "%{http_code}" "http://localhost:${EMBEDDINGS_PORT}/health" 2>/dev/null || echo "000")
 
   if [[ "$CRON_MODE" == "true" ]]; then
     # Cron mode: only output on errors
-    if [[ "$SPARK1_STATUS" != "running" ]] || [[ "$SPARK2_STATUS" != "running" ]] || [[ "$VLLM_HEALTH" != "200" ]]; then
-      echo "[$timestamp] [ERROR] Cluster unhealthy - spark-1: $SPARK1_STATUS, spark-2: $SPARK2_STATUS, vLLM: $VLLM_HEALTH"
+    if [[ "$SPARK1_STATUS" != "running" ]] || [[ "$VLLM_HEALTH" != "200" ]]; then
+      echo "[$timestamp] [ERROR] Cluster unhealthy - spark-1: $SPARK1_STATUS, spark-2: $SPARK2_STATUS, vLLM API: $VLLM_HEALTH"
       echo "[$timestamp] [INFO] Attempting restart..."
-      "$SCRIPT_DIR/start-cluster.sh"
+      "$SCRIPT_DIR/hydra-up.sh"
     fi
   else
     # Interactive mode: always output status
     echo "[$timestamp] Cluster Status:"
-    echo "  spark-1 container: $SPARK1_STATUS"
-    echo "  spark-2 container: $SPARK2_STATUS"
-    echo "  vLLM API health: $VLLM_HEALTH"
+    echo "  spark-1 containers: $SPARK1_STATUS"
+    echo "  spark-2 containers: $SPARK2_STATUS"
+    echo "  vLLM API health:    $VLLM_HEALTH (port $EMBEDDINGS_PORT)"
 
-    if [[ "$SPARK1_STATUS" == "running" ]] && [[ "$SPARK2_STATUS" == "running" ]] && [[ "$VLLM_HEALTH" == "200" ]]; then
+    if [[ "$SPARK1_STATUS" == "running" ]] && [[ "$VLLM_HEALTH" == "200" ]]; then
       echo "  [OK] Cluster healthy"
     else
       echo "  [WARN] Cluster unhealthy"

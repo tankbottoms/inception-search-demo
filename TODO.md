@@ -2,65 +2,60 @@
 
 Implementation tasks for the ONNX TypeScript backend.
 
-## Phase 2: Core Backend
+## Phase 2: Core Backend ✅ COMPLETE
 
-- [ ] Set up Hono server in `src/index.ts`
-- [ ] Implement provider detection in `src/providers/provider-factory.ts`
-- [ ] Create model registry loader in `src/services/model-registry.ts`
-- [ ] Build HuggingFace API client in `src/services/huggingface.ts`
-- [ ] Add structured logging in `src/instrumentation/logger.ts`
+- [x] Set up Hono server in `src/index.ts`
+- [x] Implement provider detection in `src/services/hardware.ts`
+- [x] Create model registry loader in `src/services/model-loader.ts`
+- [x] Build settings/config management in `src/services/config.ts`
+- [x] Add structured logging in `src/services/logger.ts`
 
-## Phase 3: Python Converter
+## Phase 3: Python Converter ✅ COMPLETE
 
-- [ ] Create `converter/Dockerfile` with optimum, torch, transformers
-- [ ] Implement CLI conversion in `converter/convert.py`
-- [ ] Add HTTP API in `converter/server.py`
-- [ ] Extract pooling config from SentenceTransformers models
+- [x] Implement CLI conversion in `converter/convert.py`
+- [x] Add HTTP API in `converter/server.py`
+- [x] Extract pooling config from SentenceTransformers models
+- [x] Create `converter/Dockerfile` with optimum, torch, transformers
 
-## Phase 4: Inference Services
+## Phase 4: Inference Services ✅ COMPLETE
 
-- [ ] Implement tokenization using Transformers.js
-- [ ] Create ONNX session management in `src/services/model-loader.ts`
-- [ ] Implement mean pooling + L2 normalization in `src/services/pooling.ts`
-- [ ] Port text chunking logic from Python in `src/services/chunking.ts`
+- [x] Implement tokenization using custom sentence tokenizer in `src/services/tokenizer.ts`
+- [x] Create ONNX session management in `src/services/model-loader.ts`
+- [x] Implement mean pooling + L2 normalization in `src/services/embedding.ts`
+- [x] Port text chunking logic in `src/services/tokenizer.ts`
 
-## Phase 5: OCR Integration
+## Phase 5: OCR Integration ✅ COMPLETE
 
-- [ ] Port Mistral OCR client to `src/services/ocr/mistral.ts`
-- [ ] Implement DeepSeek-OCR local inference
-- [ ] Implement HunyuanOCR local inference
-- [ ] Create unified OCR route in `src/routes/ocr.ts`
+- [x] Port Mistral OCR client to `src/services/ocr/mistral.ts`
+- [x] Create unified OCR interface in `src/services/ocr/index.ts`
+- [x] Create HunyuanOCR Python->ONNX converter in `converter/convert_hunyuan_ocr.py`
+- [x] Implement HunyuanOCR ONNX inference in `src/services/ocr/hunyuan.ts`
+- [x] Add image preprocessing pipeline with sharp
+- [x] Support both CPU and CUDA ONNX runtime providers
+- [x] Remove DeepSeek-OCR (not compatible with ONNX)
 
-## Phase 6: Demo Client
+## Phase 6: Demo Client ✅ COMPLETE
 
-- [ ] Create demo CLI in `demo/src/index.ts`
-- [ ] Implement PDF processing pipeline
-- [ ] Build OCR -> Embedding workflow
-- [ ] Add search with cosine similarity
-- [ ] Implement benchmark reporting
+- [x] Create demo CLI in `demo/src/index.ts`
+- [x] Implement PDF processing pipeline (text extraction + OCR fallback)
+- [x] Build OCR -> Embedding workflow
+- [x] Add search with cosine similarity
+- [x] Implement benchmark reporting
+- [x] Add Makefile with simple commands
 
 ## Phase 7: Docker & Scripts
 
-- [ ] Create `Dockerfile` for CPU builds
-- [ ] Create `Dockerfile.cuda` for GPU builds
-- [ ] Update `docker-compose.yml` with new profiles
-- [ ] Create `scripts/startup.sh` with auto-detection
+- [x] Create `Dockerfile` for CPU builds
+- [x] Create `Dockerfile.cuda` for GPU builds
+- [x] Update `docker-compose.yml` with new profiles
+- [x] Create `scripts/startup.sh` with auto-detection
 - [ ] Add `scripts/check-models.sh` for model validation
 - [ ] Add `scripts/benchmark.sh` for comparison runs
 
-## Phase 8: vLLM Alternative
-
-- [ ] Create `vllm/docker-compose.spark-1.yml`
-- [ ] Create `vllm/docker-compose.spark-2.yml`
-- [ ] Implement `vllm/scripts/start-cluster.sh`
-- [ ] Implement `vllm/scripts/stop-cluster.sh`
-- [ ] Add `vllm/scripts/monitor.sh` for crontab monitoring
-- [ ] Document vLLM setup in `vllm/README.md`
-
 ## Phase 9: Benchmarking
 
+- [x] Implement CLI benchmarking in `src/cli.ts`
 - [ ] Implement CPU vs GPU comparison
-- [ ] Add vLLM distributed benchmarks
 - [ ] Generate comparison reports
 - [ ] Document benchmark methodology
 

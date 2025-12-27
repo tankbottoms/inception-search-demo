@@ -1,0 +1,43 @@
+{
+  "name": "vllm-hydra-client",
+  "version": "2.2.0",
+  "description": "Demo and benchmark client for vLLM Hydra cluster",
+  "type": "module",
+  "scripts": {
+    "demo": "bun run src/index.ts demo",
+    "demo:full": "bun run src/demo.ts run",
+    "demo:status": "bun run src/demo.ts status",
+    "ocr": "bun run src/index.ts ocr",
+    "pipeline": "bun run src/index.ts pipeline",
+    "benchmark": "bun run src/index.ts benchmark",
+    "test": "bun run src/index.ts test",
+    "health": "bun run src/index.ts health",
+    "cot": "bun run src/cot-demo.ts",
+    "cot:quick": "bun run src/cot-demo.ts --quick",
+    "cot:test": "bun run src/cot-demo.ts --test",
+    "cot:math": "bun run src/cot-demo.ts --test math",
+    "cot:logic": "bun run src/cot-demo.ts --test logic",
+    "ocr-pipeline": "bun run src/ocr-pipeline.ts",
+    "ocr-pipeline:benchmark": "bun run src/ocr-pipeline.ts --benchmark",
+    "ocr-pipeline:lb": "bun run src/ocr-pipeline.ts --load-balanced",
+    "verify": "bun run src/verify-demo.ts",
+    "verify:ocr": "bun run src/verify-demo.ts --ocr",
+    "verify:embedding": "bun run src/verify-demo.ts --embedding",
+    "verify:search": "bun run src/verify-demo.ts --search",
+    "stress": "bun run src/stress-test.ts",
+    "stress:compare": "bun run src/stress-test.ts --compare",
+    "stress:lb": "bun run src/stress-test.ts --lb"
+  },
+  "dependencies": {
+    "axios": "^1.7.0",
+    "chalk": "^5.3.0",
+    "commander": "^12.1.0",
+    "pdf-parse": "^1.1.1",
+    "pdf2pic": "^3.1.0",
+    "sharp": "^0.33.0"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5.6.0"
+  }
+}

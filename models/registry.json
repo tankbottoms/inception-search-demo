@@ -1,5 +1,5 @@
 {
-  "version": "1.0",
+  "version": "1.2",
   "cache_dir": "/models",
   "models": [
     {
@@ -7,6 +7,23 @@
       "name": "freelawproject/modernbert-embed-base_finetune_512",
       "type": "embedding",
       "enabled": true,
+      "downloaded": true,
+      "size_gb": 0.57,
+      "tested": {
+        "cpu": true,
+        "gpu": true
+      },
+      "formats": ["onnx", "pytorch"],
+      "loading": {
+        "memory_gb": 0.29,
+        "time_seconds": 11,
+        "last_measured": "2024-12-26"
+      },
+      "vllm": {
+        "port": 8001,
+        "container": "vllm-freelaw-modernbert",
+        "gpu_memory_util": 0.10
+      },
       "config": {
         "max_tokens": 512,
         "embedding_dim": 768,
@@ -17,31 +34,64 @@
       }
     },
     {
-      "id": "deepseek-ocr",
-      "name": "deepseek-ai/DeepSeek-OCR",
-      "type": "ocr",
-      "enabled": true,
-      "config": {
-        "max_image_size": 4096
-      }
-    },
-    {
       "id": "hunyuan-ocr",
       "name": "tencent/HunyuanOCR",
       "type": "ocr",
       "enabled": true,
+      "downloaded": true,
+      "size_gb": 1.9,
+      "tested": {
+        "cpu": false,
+        "gpu": true
+      },
+      "formats": ["pytorch", "onnx"],
+      "architecture": "hunyuan_vl",
+      "requirements": ["transformers>=4.48", "onnxruntime-gpu"],
+      "loading": {
+        "memory_gb": 1.90,
+        "time_seconds": 22,
+        "last_measured": "2024-12-26"
+      },
+      "vllm": {
+        "port": 8003,
+        "container": "vllm-hunyuanOCR",
+        "gpu_memory_util": 0.40
+      },
       "config": {
-        "max_image_size": 4096
+        "max_image_size": 2048,
+        "max_tokens": 4096,
+        "trust_remote_code": true,
+        "vision_hidden_size": 1152,
+        "text_hidden_size": 1024,
+        "patch_size": 16
       }
     },
     {
-      "id": "gpt-oss",
-      "name": "gpt-oss:20b",
+      "id": "gpt-oss-20b",
+      "name": "openai/gpt-oss-20b",
       "type": "inference",
-      "enabled": false,
-      "status": "planned",
+      "enabled": true,
+      "downloaded": true,
+      "size_gb": 26,
+      "tested": {
+        "cpu": false,
+        "gpu": true
+      },
+      "loading": {
+        "memory_gb": 13.7,
+        "time_seconds": 75,
+        "cuda_graph_seconds": 120,
+        "last_measured": "2024-12-27",
+        "notes": "Large model with CUDA graph compilation"
+      },
+      "vllm": {
+        "port": 8004,
+        "container": "vllm-gpt-oss-20b",
+        "gpu_memory_util": 0.45
+      },
       "config": {
-        "max_tokens": 131072
+        "max_tokens": 8192,
+        "quantization": "mxfp4"
       }
     }
   ]

@@ -1,0 +1,26 @@
+# Traefik Static Configuration
+# Load balancer for vLLM Hydra services
+
+api:
+  dashboard: true
+  insecure: true
+
+entryPoints:
+  embeddings:
+    address: ":8000"
+  traefik:
+    address: ":8080"
+
+providers:
+  file:
+    filename: /etc/traefik/dynamic.yml
+    watch: true
+
+log:
+  level: INFO
+
+accessLog:
+  format: json
+  filters:
+    statusCodes:
+      - "400-599"

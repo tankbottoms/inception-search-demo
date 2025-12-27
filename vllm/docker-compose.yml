@@ -1,0 +1,468 @@
+# vLLM Hydra Cluster - Multi-Model Inference Stack
+#
+# Core Services (always started):
+#   - vllm-freelaw-modernbert:  Embeddings model (port 8001)
+#   - vllm-hunyuanOCR:          Tencent HunyuanOCR model (port 8003)
+#
+# Inference Options (choose one via profile):
+#   - vllm-llama:               Llama 3.1 8B - fast (~30s load)
+#   - vllm-gpt-oss-20b:         GPT-OSS 20B - optimized (~100s warm, ~165s cold)
+#   - vllm-gpt-oss-20b-eager:   GPT-OSS 20B eager - fastest startup (~80s)
+#
+# Scaling Options:
+#   - embeddings-scaled:        2x ModernBERT replicas + Traefik LB (port 8000)
+#
+# Optional Services (profiles):
+#   - hydra-client:             Demo client with OCR tools
+#   - ray-head:                 Ray head node for distributed inference
+#   - hydra-monitor:            Health monitoring service
+#
+# Usage:
+#   docker compose up -d                                # Start core (embed+OCR only)
+#   docker compose --profile embeddings-scaled up -d    # Start with 2x embeddings + LB
+#   docker compose --profile llama up -d                # Start with Llama inference
+#   docker compose --profile gpt-oss up -d              # Start with GPT-OSS (optimized)
+#   docker compose run --rm hydra-client demo:full      # Run demo
+#   docker compose run --rm hydra-client health         # Check services
+#   docker compose down                                 # Stop all services
+
+name: vllm-hydra
+
+services:
+  # ===========================================================================
+  # EMBEDDINGS SERVICE - vllm-freelaw-modernbert
+  # FreeLaw ModernBERT embeddings model for semantic search
+  # ===========================================================================
+  vllm-freelaw-modernbert:
+    container_name: vllm-freelaw-modernbert
+    image: ${VLLM_IMAGE:-vllm/vllm-openai:nightly-aarch64}
+    restart: unless-stopped
+    entrypoint: >
+      /bin/bash -c "vllm serve ${EMBEDDINGS_MODEL:-freelawproject/modernbert-embed-base_finetune_512}
+      --host 0.0.0.0
+      --port 8001
+      --gpu-memory-utilization ${EMBEDDINGS_GPU_MEMORY_UTIL:-0.10}
+      --max-model-len 512
+      --dtype auto
+      --trust-remote-code"
+    network_mode: host
+    volumes:
+      - ${HF_CACHE_DIR:-/home/rooot/.cache/huggingface}:/root/.cache/huggingface
+      - ./files:/files:ro
+    environment:
+      - CUDA_VISIBLE_DEVICES=0
+      - TORCH_CUDA_ARCH_LIST=${TORCH_CUDA_ARCH_LIST:-12.1a}
+      - TRITON_PTXAS_PATH=/usr/local/cuda/bin/ptxas
+      - PATH=/usr/local/cuda/bin:$PATH
+      - LD_LIBRARY_PATH=/usr/local/cuda/lib64:$LD_LIBRARY_PATH
+      - HF_HOME=/root/.cache/huggingface
+      - VLLM_API_KEY=${VLLM_API_KEY:-}
+    shm_size: ${SHM_SIZE:-10.24g}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ['0']
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+    labels:
+      - "hydra.service=embeddings"
+      - "hydra.model=${EMBEDDINGS_MODEL:-freelawproject/modernbert-embed-base_finetune_512}"
+      - "hydra.port=8001"
+
+  # ===========================================================================
+  # EMBEDDINGS REPLICA 2 - vllm-freelaw-modernbert-2
+  # Second ModernBERT instance for load balancing (use with embeddings-scaled)
+  # ===========================================================================
+  vllm-freelaw-modernbert-2:
+    container_name: vllm-freelaw-modernbert-2
+    image: ${VLLM_IMAGE:-vllm/vllm-openai:nightly-aarch64}
+    restart: unless-stopped
+    profiles:
+      - embeddings-scaled
+    entrypoint: >
+      /bin/bash -c "vllm serve ${EMBEDDINGS_MODEL:-freelawproject/modernbert-embed-base_finetune_512}
+      --host 0.0.0.0
+      --port 8002
+      --gpu-memory-utilization ${EMBEDDINGS_GPU_MEMORY_UTIL:-0.10}
+      --max-model-len 512
+      --dtype auto
+      --trust-remote-code"
+    network_mode: host
+    volumes:
+      - ${HF_CACHE_DIR:-/home/rooot/.cache/huggingface}:/root/.cache/huggingface
+      - ./files:/files:ro
+    environment:
+      - CUDA_VISIBLE_DEVICES=0
+      - TORCH_CUDA_ARCH_LIST=${TORCH_CUDA_ARCH_LIST:-12.1a}
+      - TRITON_PTXAS_PATH=/usr/local/cuda/bin/ptxas
+      - PATH=/usr/local/cuda/bin:$PATH
+      - LD_LIBRARY_PATH=/usr/local/cuda/lib64:$LD_LIBRARY_PATH
+      - HF_HOME=/root/.cache/huggingface
+      - VLLM_API_KEY=${VLLM_API_KEY:-}
+    shm_size: ${SHM_SIZE:-10.24g}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ['0']
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8002/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+    labels:
+      - "hydra.service=embeddings-2"
+      - "hydra.model=${EMBEDDINGS_MODEL:-freelawproject/modernbert-embed-base_finetune_512}"
+      - "hydra.port=8002"
+
+  # ===========================================================================
+  # TRAEFIK LOAD BALANCER - embeddings-lb
+  # Load balances across ModernBERT replicas
+  # Unified endpoint: http://localhost:8000/v1/embeddings
+  # Dashboard: http://localhost:8088
+  # ===========================================================================
+  embeddings-lb:
+    container_name: embeddings-lb
+    image: traefik:v3.2
+    restart: unless-stopped
+    profiles:
+      - embeddings-scaled
+    command:
+      - "--api.dashboard=true"
+      - "--api.insecure=true"
+      - "--entrypoints.embeddings.address=:8000"
+      - "--entrypoints.traefik.address=:8088"
+      - "--providers.file.filename=/etc/traefik/dynamic.yml"
+      - "--providers.file.watch=true"
+      - "--log.level=INFO"
+    ports:
+      - "8000:8000"
+      - "8088:8088"
+    volumes:
+      - ./traefik:/etc/traefik:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      - vllm-freelaw-modernbert
+      - vllm-freelaw-modernbert-2
+    labels:
+      - "hydra.service=embeddings-lb"
+      - "hydra.type=load-balancer"
+      - "hydra.port=8000"
+
+  # ===========================================================================
+  # HUNYUAN OCR SERVICE - vllm-hunyuanOCR
+  # Tencent HunyuanOCR model for document text extraction
+  # Uses ARM64 vllm image which has hunyuan_vl architecture support
+  # ===========================================================================
+  vllm-hunyuanOCR:
+    container_name: vllm-hunyuanOCR
+    image: vllm/vllm-openai:nightly-aarch64
+    restart: unless-stopped
+    entrypoint: >
+      /bin/bash -c "vllm serve ${HUNYUAN_OCR_MODEL:-tencent/HunyuanOCR}
+      --no-enable-prefix-caching
+      --mm-processor-cache-gb 0
+      --gpu-memory-utilization ${HUNYUAN_OCR_GPU_MEMORY_UTIL:-0.40}
+      --host 0.0.0.0
+      --port 8003"
+    network_mode: host
+    volumes:
+      - ${HF_CACHE_DIR:-/home/rooot/.cache/huggingface}:/root/.cache/huggingface
+      - ./files:/files:ro
+    environment:
+      - CUDA_VISIBLE_DEVICES=0
+      - TORCH_CUDA_ARCH_LIST=${TORCH_CUDA_ARCH_LIST:-12.1a}
+      - TRITON_PTXAS_PATH=/usr/local/cuda/bin/ptxas
+      - PATH=/usr/local/cuda/bin:$PATH
+      - LD_LIBRARY_PATH=/usr/local/cuda/lib64:$LD_LIBRARY_PATH
+      - HF_HOME=/root/.cache/huggingface
+      - VLLM_API_KEY=${VLLM_API_KEY:-}
+    shm_size: ${SHM_SIZE:-10.24g}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8003/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 180s
+    labels:
+      - "hydra.service=hunyuan-ocr"
+      - "hydra.model=${HUNYUAN_OCR_MODEL:-tencent/HunyuanOCR}"
+      - "hydra.port=8003"
+
+  # ===========================================================================
+  # GPT-OSS 20B INFERENCE SERVICE - vllm-gpt-oss-20b
+  # GPT-OSS 20B model for general inference
+  # Use --profile gpt-oss to enable: docker compose --profile gpt-oss up -d
+  #
+  # Loading optimizations applied:
+  #   - torch.compile cache persisted (saves ~30s on restart)
+  #   - max-num-seqs reduced for faster KV cache warmup
+  #   - Cold start: ~165s, Warm start: ~100s
+  # ===========================================================================
+  vllm-gpt-oss-20b:
+    container_name: vllm-gpt-oss-20b
+    image: ${VLLM_IMAGE:-vllm/vllm-openai:nightly-aarch64}
+    restart: unless-stopped
+    profiles:
+      - gpt-oss
+    entrypoint: >
+      /bin/bash -c "vllm serve ${GPT_OSS_20B_MODEL:-openai/gpt-oss-20b}
+      --host 0.0.0.0
+      --port 8004
+      --gpu-memory-utilization ${GPT_OSS_GPU_MEMORY_UTIL:-0.45}
+      --max-model-len ${GPT_OSS_20B_MAX_MODEL_LEN:-8192}
+      --max-num-seqs ${GPT_OSS_MAX_NUM_SEQS:-32}
+      --dtype auto
+      --trust-remote-code"
+    network_mode: host
+    volumes:
+      - ${HF_CACHE_DIR:-/home/rooot/.cache/huggingface}:/root/.cache/huggingface
+      - vllm-compile-cache:/root/.cache/vllm
+      - ./files:/files:ro
+    environment:
+      - CUDA_VISIBLE_DEVICES=0
+      - TORCH_CUDA_ARCH_LIST=${TORCH_CUDA_ARCH_LIST:-12.1a}
+      - TRITON_PTXAS_PATH=/usr/local/cuda/bin/ptxas
+      - PATH=/usr/local/cuda/bin:$PATH
+      - LD_LIBRARY_PATH=/usr/local/cuda/lib64:$LD_LIBRARY_PATH
+      - HF_HOME=/root/.cache/huggingface
+      - VLLM_API_KEY=${VLLM_API_KEY:-}
+    shm_size: ${SHM_SIZE:-10.24g}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8004/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 180s
+    labels:
+      - "hydra.service=gpt-oss-20b"
+      - "hydra.model=${GPT_OSS_20B_MODEL:-openai/gpt-oss-20b}"
+      - "hydra.port=8004"
+
+  # ===========================================================================
+  # GPT-OSS 20B EAGER MODE - Fastest startup (~80s), slower inference
+  # Skips CUDA graph compilation entirely
+  # Use --profile gpt-oss-eager for quick iterations/testing
+  # ===========================================================================
+  vllm-gpt-oss-20b-eager:
+    container_name: vllm-gpt-oss-20b
+    image: ${VLLM_IMAGE:-vllm/vllm-openai:nightly-aarch64}
+    restart: unless-stopped
+    profiles:
+      - gpt-oss-eager
+    entrypoint: >
+      /bin/bash -c "vllm serve ${GPT_OSS_20B_MODEL:-openai/gpt-oss-20b}
+      --host 0.0.0.0
+      --port 8004
+      --gpu-memory-utilization ${GPT_OSS_GPU_MEMORY_UTIL:-0.45}
+      --max-model-len 4096
+      --max-num-seqs 16
+      --enforce-eager
+      --dtype auto
+      --trust-remote-code"
+    network_mode: host
+    volumes:
+      - ${HF_CACHE_DIR:-/home/rooot/.cache/huggingface}:/root/.cache/huggingface
+      - ./files:/files:ro
+    environment:
+      - CUDA_VISIBLE_DEVICES=0
+      - TORCH_CUDA_ARCH_LIST=${TORCH_CUDA_ARCH_LIST:-12.1a}
+      - TRITON_PTXAS_PATH=/usr/local/cuda/bin/ptxas
+      - PATH=/usr/local/cuda/bin:$PATH
+      - LD_LIBRARY_PATH=/usr/local/cuda/lib64:$LD_LIBRARY_PATH
+      - HF_HOME=/root/.cache/huggingface
+      - VLLM_API_KEY=${VLLM_API_KEY:-}
+    shm_size: ${SHM_SIZE:-10.24g}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8004/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+    labels:
+      - "hydra.service=gpt-oss-20b-eager"
+      - "hydra.model=${GPT_OSS_20B_MODEL:-openai/gpt-oss-20b}"
+      - "hydra.port=8004"
+
+  # ===========================================================================
+  # LLAMA 3.1 8B INFERENCE SERVICE - vllm-llama
+  # Faster loading alternative to GPT-OSS 20B
+  # Use --profile llama to enable: docker compose --profile llama up -d
+  # ===========================================================================
+  vllm-llama:
+    container_name: vllm-llama
+    image: ${VLLM_IMAGE:-vllm/vllm-openai:nightly-aarch64}
+    restart: unless-stopped
+    profiles:
+      - llama
+    entrypoint: >
+      /bin/bash -c "vllm serve ${LLAMA_MODEL:-meta-llama/Llama-3.1-8B-Instruct}
+      --host 0.0.0.0
+      --port 8004
+      --gpu-memory-utilization ${LLAMA_GPU_MEMORY_UTIL:-0.45}
+      --max-model-len ${LLAMA_MAX_MODEL_LEN:-4096}
+      --dtype auto
+      --trust-remote-code"
+    network_mode: host
+    volumes:
+      - ${HF_CACHE_DIR:-/home/rooot/.cache/huggingface}:/root/.cache/huggingface
+      - ./files:/files:ro
+    environment:
+      - CUDA_VISIBLE_DEVICES=0
+      - TORCH_CUDA_ARCH_LIST=${TORCH_CUDA_ARCH_LIST:-12.1a}
+      - TRITON_PTXAS_PATH=/usr/local/cuda/bin/ptxas
+      - PATH=/usr/local/cuda/bin:$PATH
+      - LD_LIBRARY_PATH=/usr/local/cuda/lib64:$LD_LIBRARY_PATH
+      - HF_HOME=/root/.cache/huggingface
+      - VLLM_API_KEY=${VLLM_API_KEY:-}
+      - HF_TOKEN=${HF_TOKEN:-}
+    shm_size: ${SHM_SIZE:-10.24g}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8004/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+    labels:
+      - "hydra.service=llama"
+      - "hydra.model=${LLAMA_MODEL:-meta-llama/Llama-3.1-8B-Instruct}"
+      - "hydra.port=8004"
+
+  # ===========================================================================
+  # RAY HEAD NODE - ray-head
+  # Ray head node for distributed inference
+  # Use --profile ray-cluster to enable
+  # ===========================================================================
+  ray-head:
+    container_name: ray-head
+    image: ${VLLM_RAY_IMAGE:-nvcr.io/nvidia/vllm:25.12-py3}
+    restart: unless-stopped
+    profiles:
+      - ray-cluster
+    entrypoint: "/bin/bash -c \"ray start --block --head --node-ip-address=${SPARK1_IP:-192.168.100.10} --port=6379\""
+    shm_size: ${SHM_SIZE:-10.24g}
+    network_mode: host
+    volumes:
+      - ${HF_CACHE_DIR:-/home/rooot/.cache/huggingface}:/root/.cache/huggingface
+    environment:
+      - MASTER_ADDR=${SPARK1_IP:-192.168.100.10}
+      - VLLM_HOST_IP=${SPARK1_IP:-192.168.100.10}
+      - UCX_NET_DEVICES=${NETWORK_INTERFACE:-enP2p1s0f1np1}
+      - NCCL_SOCKET_IFNAME=${NETWORK_INTERFACE:-enP2p1s0f1np1}
+      - OMPI_MCA_btl_tcp_if_include=${NETWORK_INTERFACE:-enP2p1s0f1np1}
+      - GLOO_SOCKET_IFNAME=${NETWORK_INTERFACE:-enP2p1s0f1np1}
+      - TP_SOCKET_IFNAME=${NETWORK_INTERFACE:-enP2p1s0f1np1}
+      - RAY_memory_monitor_refresh_ms=0
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    labels:
+      - "hydra.service=ray-head"
+      - "hydra.node=spark-1"
+      - "hydra.role=ray-head"
+
+  # ===========================================================================
+  # MONITOR SERVICE - hydra-monitor
+  # Cron-based health monitoring with auto-restart capability
+  # ===========================================================================
+  hydra-monitor:
+    container_name: hydra-monitor
+    build:
+      context: .
+      dockerfile: Dockerfile.monitor
+    restart: unless-stopped
+    profiles:
+      - monitor
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./scripts:/scripts:ro
+      - ./logs:/var/log/vllm-hydra
+      - ./.env:/app/.env:ro
+    environment:
+      - MONITOR_INTERVAL=${MONITOR_INTERVAL:-60}
+      - MONITOR_AUTO_RESTART=${MONITOR_AUTO_RESTART:-true}
+      - EMBEDDINGS_PORT=8001
+      - HUNYUAN_OCR_PORT=8003
+      - GPT_OSS_20B_PORT=8004
+      - HOST_IP=${SPARK1_IP:-192.168.100.10}
+      - SPARK2_IP=${SPARK2_IP:-192.168.100.11}
+    network_mode: host
+    labels:
+      - "hydra.service=monitor"
+
+  # ===========================================================================
+  # DEMO CLIENT - hydra-client
+  # Full-featured demo client with OCR tools (graphicsmagick, ghostscript)
+  # Usage: docker compose run --rm hydra-client demo:full
+  # ===========================================================================
+  hydra-client:
+    container_name: hydra-client
+    build:
+      context: ./client
+      dockerfile: Dockerfile
+      network: host
+    profiles:
+      - client
+    network_mode: host
+    volumes:
+      - ./files:/app/files
+      - ./output:/app/output
+    environment:
+      - EMBEDDINGS_URL=http://localhost:8001
+      - OCR_URL=http://localhost:8003
+      - INFERENCE_URL=http://localhost:8004
+      - FILES_DIR=/app/files
+      - OUTPUT_DIR=/app/output
+    working_dir: /app
+    labels:
+      - "hydra.service=client"
+      - "hydra.type=demo"
+
+volumes:
+  hydra-logs:
+    name: vllm-hydra-logs
+  vllm-compile-cache:
+    name: vllm-compile-cache

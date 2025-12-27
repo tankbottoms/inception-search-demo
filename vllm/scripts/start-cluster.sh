@@ -39,32 +39,36 @@ echo "[INFO] Tensor Parallel: $TENSOR_PARALLEL"
 echo "[INFO] GPU Memory Utilization: $GPU_MEMORY_UTILIZATION"
 echo ""
 
+# Spark-2 configuration
+SPARK2_HOST="${SPARK2_HOST:-rooot@spark-2}"
+SPARK2_PATH="${SPARK2_PATH:-/home/rooot/Docker/vllm-hydra}"
+
 # Stop existing containers
 echo "[INFO] Stopping existing containers..."
-docker compose -f "$VLLM_DIR/docker-compose.spark-1.yml" down 2>/dev/null || true
-ssh rooot@spark-2 "docker compose -f /home/rooot/Docker/vllm/docker-compose.yml down" 2>/dev/null || true
+docker compose -f "$VLLM_DIR/docker-compose.yml" --profile ray-cluster down 2>/dev/null || true
+ssh "$SPARK2_HOST" "cd $SPARK2_PATH && docker compose -f docker-compose.spark2.yml down" 2>/dev/null || true
 
 sleep 2
 
 # Start spark-1 (head node)
 echo "[INFO] Starting spark-1 (head node)..."
-docker compose -f "$VLLM_DIR/docker-compose.spark-1.yml" up --build -d
+docker compose -f "$VLLM_DIR/docker-compose.yml" --profile ray-cluster up --build -d
 
 sleep 5
 
 # Start spark-2 (worker node)
 echo "[INFO] Starting spark-2 (worker node)..."
-ssh rooot@spark-2 "docker compose -f /home/rooot/Docker/vllm/docker-compose.yml up --build -d"
+ssh "$SPARK2_HOST" "cd $SPARK2_PATH && docker compose -f docker-compose.spark2.yml up --build -d"
 
 sleep 5
 
 # Check Ray cluster status
 echo "[INFO] Checking Ray cluster status..."
-docker compose -f "$VLLM_DIR/docker-compose.spark-1.yml" exec vllm ray status || true
+docker compose -f "$VLLM_DIR/docker-compose.yml" exec ray-head ray status || true
 
 # Start vLLM server
 echo "[INFO] Starting vLLM server with model: $MODEL"
-docker compose -f "$VLLM_DIR/docker-compose.spark-1.yml" exec -d vllm bash -c \
+docker compose -f "$VLLM_DIR/docker-compose.yml" exec ray-head -d bash -c \
   "vllm serve $MODEL \
     --max_model_len $MAX_MODEL_LEN \
     --tensor-parallel-size $TENSOR_PARALLEL \

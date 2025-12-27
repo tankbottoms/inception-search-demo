@@ -1,0 +1,159 @@
+# vLLM Hydra Cluster - Spark-2 Workers
+#
+# Deployed to spark-2 (192.168.1.63 / 100.87.229.92)
+# Primary on spark-1 (192.168.1.76 / 100.70.220.58)
+#
+# Usage:
+#   docker compose up -d                     # Start OCR worker (default)
+#   docker compose --profile inference up -d # Start GPT-OSS worker
+#   docker compose --profile embeddings up -d # Start embeddings worker
+#   docker compose --profile all up -d       # Start all workers
+
+name: vllm-hydra-spark2
+
+services:
+  # ===========================================================================
+  # EMBEDDINGS WORKER - vllm-freelaw-modernbert-worker
+  # Optional: Only needed if you want distributed embeddings (small model)
+  # ===========================================================================
+  vllm-freelaw-modernbert-worker:
+    container_name: vllm-freelaw-modernbert-worker
+    image: ${VLLM_IMAGE:-vllm/vllm-openai:nightly-aarch64}
+    restart: unless-stopped
+    profiles:
+      - embeddings
+      - all
+    entrypoint: >
+      /bin/bash -c "vllm serve ${EMBEDDINGS_MODEL:-freelawproject/modernbert-embed-base_finetune_512}
+      --host 0.0.0.0
+      --port 8000
+      --gpu-memory-utilization ${EMBEDDINGS_GPU_MEMORY_UTIL:-0.10}
+      --max-model-len 512
+      --dtype auto
+      --trust-remote-code"
+    ports:
+      - "8001:8000"
+    volumes:
+      - ${HF_CACHE_DIR:-/home/rooot/.cache/huggingface}:/root/.cache/huggingface
+    environment:
+      - CUDA_VISIBLE_DEVICES=0
+      - TORCH_CUDA_ARCH_LIST=${TORCH_CUDA_ARCH_LIST:-12.1a}
+      - TRITON_PTXAS_PATH=/usr/local/cuda/bin/ptxas
+      - PATH=/usr/local/cuda/bin:$PATH
+      - LD_LIBRARY_PATH=/usr/local/cuda/lib64:$LD_LIBRARY_PATH
+      - HF_HOME=/root/.cache/huggingface
+    shm_size: ${SHM_SIZE:-10.24g}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ['0']
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+    labels:
+      - "hydra.service=embeddings"
+      - "hydra.node=spark-2"
+
+  # ===========================================================================
+  # OCR WORKER - vllm-hunyuanOCR-worker (DEFAULT)
+  # HunyuanOCR for document processing - starts by default
+  # ===========================================================================
+  vllm-hunyuanOCR-worker:
+    container_name: vllm-hunyuanOCR-worker
+    image: ${VLLM_IMAGE:-vllm/vllm-openai:nightly-aarch64}
+    restart: unless-stopped
+    entrypoint: >
+      /bin/bash -c "vllm serve ${HUNYUAN_OCR_MODEL:-tencent/HunyuanOCR}
+      --no-enable-prefix-caching
+      --mm-processor-cache-gb 0
+      --gpu-memory-utilization ${HUNYUAN_OCR_GPU_MEMORY_UTIL:-0.40}
+      --host 0.0.0.0
+      --port 8000"
+    ports:
+      - "8003:8000"
+    volumes:
+      - ${HF_CACHE_DIR:-/home/rooot/.cache/huggingface}:/root/.cache/huggingface
+    environment:
+      - CUDA_VISIBLE_DEVICES=0
+      - TORCH_CUDA_ARCH_LIST=${TORCH_CUDA_ARCH_LIST:-12.1a}
+      - TRITON_PTXAS_PATH=/usr/local/cuda/bin/ptxas
+      - PATH=/usr/local/cuda/bin:$PATH
+      - LD_LIBRARY_PATH=/usr/local/cuda/lib64:$LD_LIBRARY_PATH
+      - HF_HOME=/root/.cache/huggingface
+    shm_size: ${SHM_SIZE:-10.24g}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ['0']
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 180s
+    labels:
+      - "hydra.service=ocr"
+      - "hydra.node=spark-2"
+
+  # ===========================================================================
+  # INFERENCE WORKER - vllm-gpt-oss-20b-worker
+  # GPT-OSS 20B for additional inference capacity
+  # ===========================================================================
+  vllm-gpt-oss-20b-worker:
+    container_name: vllm-gpt-oss-20b-worker
+    image: ${VLLM_IMAGE:-vllm/vllm-openai:nightly-aarch64}
+    restart: unless-stopped
+    profiles:
+      - inference
+      - all
+    entrypoint: >
+      /bin/bash -c "vllm serve ${GPT_OSS_20B_MODEL:-openai/gpt-oss-20b}
+      --host 0.0.0.0
+      --port 8000
+      --gpu-memory-utilization ${GPT_OSS_GPU_MEMORY_UTIL:-0.45}
+      --max-model-len ${GPT_OSS_20B_MAX_MODEL_LEN:-8192}
+      --dtype auto
+      --trust-remote-code
+      --enable-reasoning --reasoning-parser deepseek_r1
+      --max-num-seqs 8"
+    ports:
+      - "8004:8000"
+    volumes:
+      - ${HF_CACHE_DIR:-/home/rooot/.cache/huggingface}:/root/.cache/huggingface
+      - vllm-compile-cache:/root/.cache/torch
+    environment:
+      - CUDA_VISIBLE_DEVICES=0
+      - TORCH_CUDA_ARCH_LIST=${TORCH_CUDA_ARCH_LIST:-12.1a}
+      - TRITON_PTXAS_PATH=/usr/local/cuda/bin/ptxas
+      - PATH=/usr/local/cuda/bin:$PATH
+      - LD_LIBRARY_PATH=/usr/local/cuda/lib64:$LD_LIBRARY_PATH
+      - HF_HOME=/root/.cache/huggingface
+    shm_size: ${SHM_SIZE:-10.24g}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ['0']
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 300s
+    labels:
+      - "hydra.service=inference"
+      - "hydra.node=spark-2"
+
+volumes:
+  vllm-compile-cache:
