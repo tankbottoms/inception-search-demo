@@ -34,7 +34,15 @@ import sharp from 'sharp';
 const EMBEDDINGS_URL = process.env.EMBEDDINGS_URL || 'http://localhost:8001';
 const EMBEDDINGS_LB_URL = process.env.EMBEDDINGS_LB_URL || 'http://localhost:8000';
 const OCR_URL = process.env.OCR_URL || 'http://localhost:8003';
-const INFERENCE_URL = process.env.INFERENCE_URL || 'http://localhost:8004';
+const OCR_LB_URL = process.env.OCR_LB_URL || 'http://localhost:8010';
+const INFERENCE_LB_URL = process.env.INFERENCE_LB_URL || 'http://localhost:8020';
+
+// Inference endpoints - spark-1 (localhost) and spark-2 (remote)
+const INFERENCE_URLS = [
+  process.env.INFERENCE_URL || 'http://localhost:8004',
+  'http://192.168.1.63:8004',  // spark-2 fallback
+];
+let activeInferenceUrl = INFERENCE_URLS[0];
 
 const FILES_DIR = process.env.FILES_DIR || join(import.meta.dir, '../../files');
 const OUTPUT_DIR = process.env.OUTPUT_DIR || join(import.meta.dir, '../../output');
@@ -224,6 +232,22 @@ async function getModelId(url: string): Promise<string | null> {
   }
 }
 
+async function findInferenceEndpoint(): Promise<{ url: string; host: string } | null> {
+  for (const url of INFERENCE_URLS) {
+    try {
+      const status = await checkService(url, 'Inference');
+      if (status.healthy) {
+        activeInferenceUrl = url;
+        const host = url.includes('192.168.1.63') ? 'spark-2' : 'spark-1';
+        return { url, host };
+      }
+    } catch {
+      // Try next endpoint
+    }
+  }
+  return null;
+}
+
 // ============================================================
 // PDF Processing
 // ============================================================
@@ -297,12 +321,21 @@ async function imageToBase64(imagePath: string): Promise<string> {
 }
 
 // ============================================================
-// OCR Service
+// OCR Service (Multi-Node)
 // ============================================================
 
-async function runOcrOnImage(imageBase64: string, modelId: string): Promise<string> {
+// OCR endpoints - spark-1, spark-2, and LB
+const OCR_ENDPOINTS = [
+  { url: OCR_URL, host: 'spark-1' },
+  { url: 'http://192.168.1.63:8003', host: 'spark-2' },
+];
+
+// Track if OCR LB is available
+let ocrLbAvailable = false;
+
+async function runOcrOnImage(imageBase64: string, modelId: string, ocrUrl: string): Promise<string> {
   const response = await axios.post<ChatResponse>(
-    `${OCR_URL}/v1/chat/completions`,
+    `${ocrUrl}/v1/chat/completions`,
     {
       model: modelId,
       messages: [
@@ -329,22 +362,103 @@ async function runOcrOnImage(imageBase64: string, modelId: string): Promise<stri
   return response.data.choices[0].message.content || '';
 }
 
+interface OcrEndpointStatus {
+  url: string;
+  host: string;
+  healthy: boolean;
+  modelId: string | null;
+}
+
+async function getAvailableOcrEndpoints(): Promise<OcrEndpointStatus[]> {
+  const endpoints: OcrEndpointStatus[] = [];
+
+  for (const ep of OCR_ENDPOINTS) {
+    try {
+      const status = await checkService(ep.url, 'OCR');
+      if (status.healthy && status.model) {
+        endpoints.push({
+          url: ep.url,
+          host: ep.host,
+          healthy: true,
+          modelId: status.model,
+        });
+      }
+    } catch {
+      // Skip unavailable endpoints
+    }
+  }
+
+  return endpoints;
+}
+
 async function processOcrPages(imagePaths: string[], modelId: string): Promise<{ ocrText: string; results: OcrResult[]; totalMs: number }> {
-  const results: OcrResult[] = [];
   const overallStart = performance.now();
 
-  for (let i = 0; i < imagePaths.length; i++) {
+  // Get available OCR endpoints
+  const ocrEndpoints = await getAvailableOcrEndpoints();
+
+  if (ocrEndpoints.length === 0) {
+    throw new Error('No OCR endpoints available');
+  }
+
+  const useParallel = ocrEndpoints.length > 1;
+  // Concurrency: 2 per endpoint for true parallel execution
+  const concurrency = ocrEndpoints.length * 2;
+
+  if (useParallel) {
+    console.log(chalk.cyan(`      Parallel OCR: ${ocrEndpoints.map(e => e.host).join(' + ')} (${concurrency} concurrent)`));
+  }
+
+  // Build task queue
+  interface OcrTask {
+    pageNum: number;
+    imagePath: string;
+    endpoint: OcrEndpointStatus;
+  }
+
+  const tasks: OcrTask[] = imagePaths.map((imagePath, i) => ({
+    pageNum: i,
+    imagePath,
+    endpoint: ocrEndpoints[i % ocrEndpoints.length],
+  }));
+
+  const results: OcrResult[] = new Array(imagePaths.length);
+  const inFlight: Promise<void>[] = [];
+  let taskIndex = 0;
+
+  const processTask = async (task: OcrTask): Promise<void> => {
     const pageStart = performance.now();
-    console.log(chalk.gray(`      OCR page ${i + 1}/${imagePaths.length}...`));
 
-    const imageBase64 = await imageToBase64(imagePaths[i]);
-    const ocrText = await runOcrOnImage(imageBase64, modelId);
+    console.log(chalk.white(`      OCR page ${task.pageNum + 1}/${imagePaths.length} → ${task.endpoint.host}`));
 
-    results.push({
-      page: i + 1,
+    const imageBase64 = await imageToBase64(task.imagePath);
+    const ocrText = await runOcrOnImage(imageBase64, task.endpoint.modelId || modelId, task.endpoint.url);
+
+    results[task.pageNum] = {
+      page: task.pageNum + 1,
       ocrText,
       ocrTimeMs: performance.now() - pageStart,
-    });
+    };
+  };
+
+  // Process with controlled concurrency - TRUE parallel execution
+  while (taskIndex < tasks.length || inFlight.length > 0) {
+    // Fill up to concurrency limit
+    while (inFlight.length < concurrency && taskIndex < tasks.length) {
+      const task = tasks[taskIndex++];
+      const promise = processTask(task).then(() => {
+        const idx = inFlight.indexOf(promise);
+        if (idx > -1) inFlight.splice(idx, 1);
+      });
+      inFlight.push(promise);
+    }
+
+    // Wait for at least one to complete if at capacity
+    if (inFlight.length >= concurrency || taskIndex >= tasks.length) {
+      if (inFlight.length > 0) {
+        await Promise.race(inFlight);
+      }
+    }
   }
 
   const ocrText = results.map((r, i) =>
@@ -392,7 +506,7 @@ Your task:
 Output ONLY the corrected, merged text in clean Markdown format. No commentary.`;
 
   const response = await axios.post<ChatResponse>(
-    `${INFERENCE_URL}/v1/chat/completions`,
+    `${activeInferenceUrl}/v1/chat/completions`,
     {
       model: modelId,
       messages: [{ role: 'user', content: prompt }],
@@ -425,7 +539,7 @@ ${text.slice(0, 8000)}
 Provide a clear, professional summary:`;
 
   const response = await axios.post<ChatResponse>(
-    `${INFERENCE_URL}/v1/chat/completions`,
+    `${activeInferenceUrl}/v1/chat/completions`,
     {
       model: modelId,
       messages: [{ role: 'user', content: prompt }],
@@ -448,52 +562,248 @@ async function generateBluebookCitation(
 ): Promise<{ citation: string; timeMs: number; reasoning: string }> {
   const start = performance.now();
 
-  const prompt = `Based on the following legal document, generate a proper Blue Book citation.
+  // Strict prompt that demands only the citation with no reasoning
+  const prompt = `You are a legal citation expert. Generate ONE Blue Book citation for this document.
 
-Filename: ${filename}
+CRITICAL: Output ONLY the citation itself. No explanations. No reasoning. No "Citation:" prefix. Just the citation.
 
-Document text (first 4000 chars):
----
+Document types:
+- Court case: Party v. Party, Volume Reporter Page (Court Year)
+- Complaint/Filing: Party v. Party, No. Case-No., Court (Year)
+- SEC Filing: Company, Form Type (Date)
+- Resume/CV: Name, Professional Resume (Year)
+- Report: Author, Title (Year)
+- Other: Title (Year)
+
+DOCUMENT TEXT:
 ${text.slice(0, 4000)}
----
 
-Identify from the text:
-1. Case name (parties)
-2. Court
-3. Volume and reporter
-4. Page number
-5. Year decided
-
-Then provide the citation in proper Blue Book format. If this is not a case, provide the appropriate citation format (statute, regulation, secondary source, etc.).
-
-Output format:
-CITATION: [the Blue Book citation]
-TYPE: [case/statute/regulation/secondary]
-NOTES: [any relevant notes about the citation]`;
+RESPOND WITH ONLY THE CITATION:`;
 
   const response = await axios.post<ChatResponse>(
-    `${INFERENCE_URL}/v1/chat/completions`,
+    `${activeInferenceUrl}/v1/chat/completions`,
     {
       model: modelId,
       messages: [{ role: 'user', content: prompt }],
-      max_tokens: 512,
-      temperature: 0.2,
+      max_tokens: 256,
+      temperature: 0.1,
     },
     { timeout: 60000 }
   );
 
-  const content = response.data.choices[0].message.content || '';
+  let citation = response.data.choices[0].message.content?.trim() || '';
   const reasoning = response.data.choices[0].message.reasoning_content || '';
 
-  // Extract citation from response
-  const citationMatch = content.match(/CITATION:\s*(.+?)(?:\n|TYPE:|$)/s);
-  const citation = citationMatch ? citationMatch[1].trim() : content.split('\n')[0];
+  // Clean up the citation - remove any reasoning artifacts
+  citation = cleanCitation(citation, text, filename);
+
+  // If citation still looks like reasoning, try to extract from reasoning_content
+  if (looksLikeReasoning(citation) && reasoning) {
+    const extracted = extractCitationFromReasoning(reasoning);
+    if (extracted) {
+      citation = cleanCitation(extracted, text, filename);
+    }
+  }
+
+  // Final fallback: generate citation from document content analysis
+  if (!citation || citation.length < 15 || looksLikeReasoning(citation)) {
+    citation = generateFallbackCitation(text, filename);
+  }
 
   return {
     citation,
     timeMs: performance.now() - start,
     reasoning,
   };
+}
+
+/**
+ * Check if text looks like model reasoning rather than a citation
+ */
+function looksLikeReasoning(text: string): boolean {
+  if (!text) return true;
+
+  const reasoningPatterns = [
+    /^we need to/i,
+    /^but/i,
+    /^let's/i,
+    /^the blue book/i,
+    /^i think/i,
+    /^first,/i,
+    /^to generate/i,
+    /document type/i,
+    /^actually/i,
+    /^wait,/i,
+    /missing info/i,
+    /we might/i,
+    /we could/i,
+    /we don't have/i,
+    /if unknown/i,
+    /placeholder/i,
+  ];
+
+  return reasoningPatterns.some(p => p.test(text.trim()));
+}
+
+/**
+ * Clean and validate citation text
+ */
+function cleanCitation(citation: string, text: string, filename: string): string {
+  if (!citation) return '';
+
+  // Remove common prefixes
+  citation = citation
+    .replace(/^citation:\s*/i, '')
+    .replace(/^blue book citation:\s*/i, '')
+    .replace(/^the citation is:\s*/i, '')
+    .replace(/^\*+/g, '')
+    .replace(/\*+$/g, '')
+    .trim();
+
+  // Take only first line if multiple lines (reasoning leaked in)
+  const firstLine = citation.split('\n')[0].trim();
+
+  // If first line looks like a proper citation, use it
+  if (firstLine.length > 20 && !looksLikeReasoning(firstLine)) {
+    citation = firstLine;
+  }
+
+  // Remove trailing incomplete sentences (model cut off mid-reasoning)
+  // Look for patterns like "But we need" or "We might have"
+  const cutoffPatterns = [
+    /\s+But\s+we\s+.*/i,
+    /\s+We\s+might\s+.*/i,
+    /\s+We\s+need\s+.*/i,
+    /\s+We\s+could\s+.*/i,
+    /\s+If\s+we\s+.*/i,
+    /\s+The\s+Blue\s+Book\s+.*/i,
+  ];
+
+  for (const pattern of cutoffPatterns) {
+    citation = citation.replace(pattern, '');
+  }
+
+  return citation.trim();
+}
+
+/**
+ * Try to extract a citation from chain-of-thought reasoning
+ */
+function extractCitationFromReasoning(reasoning: string): string | null {
+  // Look for citation patterns in reasoning
+  const citationPatterns = [
+    // Case citations: "Party v. Party, 123 F.3d 456 (Court 2000)"
+    /([A-Z][a-zA-Z\s&.,]+\s+v\.\s+[A-Z][a-zA-Z\s&.,]+,\s*\d+\s+[A-Z][a-zA-Z.]+\d*\s+\d+\s*\([^)]+\d{4}\))/,
+    // Case with case number: "Party v. Party, No. 00-1234 (Court 2000)"
+    /([A-Z][a-zA-Z\s&.,]+\s+v\.\s+[A-Z][a-zA-Z\s&.,]+,\s*No\.\s*[\w-]+[^.]{0,50}\(\d{4}\))/,
+    // Complaint format: "Party v. Party, Complaint, Court (Year)"
+    /([A-Z][a-zA-Z\s&.,]+\s+v\.\s+[A-Z][a-zA-Z\s&.,]+,\s*(?:Complaint|Motion|Filing)[^.]{0,80}\(\d{4}\))/,
+  ];
+
+  for (const pattern of citationPatterns) {
+    const match = reasoning.match(pattern);
+    if (match && match[1]) {
+      return match[1].trim();
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Generate a fallback citation by analyzing document content
+ */
+function generateFallbackCitation(text: string, filename: string): string {
+  const textLower = text.toLowerCase();
+  const textSample = text.slice(0, 8000);
+
+  // Try to extract parties from "v." pattern
+  const vsMatch = textSample.match(/([A-Z][A-Za-z\s,.'&]+)\s+v[s]?\.\s+([A-Z][A-Za-z\s,.'&]+)/);
+
+  // Try to extract case number
+  const caseNoMatch = textSample.match(/(?:Case|No\.|Docket|Civil Action)[:\s#]*([A-Z0-9][\w-]+)/i);
+
+  // Try to extract year
+  const yearMatch = textSample.match(/\b(19[5-9]\d|20[0-2]\d)\b/);
+  const year = yearMatch ? yearMatch[1] : new Date().getFullYear().toString();
+
+  // Detect document type and court
+  let court = '';
+  let docType = '';
+
+  if (/superior court/i.test(textSample)) {
+    const stateMatch = textSample.match(/Superior Court[^,]*,?\s*(?:of\s+)?([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)/i);
+    court = stateMatch ? `Superior Court of ${stateMatch[1]}` : 'Superior Court';
+  } else if (/district court/i.test(textSample)) {
+    if (/eastern district/i.test(textSample)) court = 'E.D.N.Y.';
+    else if (/western district/i.test(textSample)) court = 'W.D.';
+    else if (/northern district/i.test(textSample)) court = 'N.D.';
+    else if (/southern district/i.test(textSample)) court = 'S.D.';
+    else court = 'U.S. District Court';
+  } else if (/court of appeals/i.test(textSample)) {
+    const circuitMatch = textSample.match(/(\w+)\s+Circuit/i);
+    court = circuitMatch ? `${circuitMatch[1]} Cir.` : 'Ct. App.';
+  } else if (/bankruptcy/i.test(textSample)) {
+    court = 'Bankr.';
+  }
+
+  if (/complaint/i.test(textSample)) docType = 'Complaint';
+  else if (/motion/i.test(textSample)) docType = 'Motion';
+  else if (/indictment/i.test(textSample)) docType = 'Indictment';
+  else if (/resume|curriculum vitae|c\.?v\.?/i.test(textSample)) docType = 'Resume';
+  else if (/form\s+10-?[kq]/i.test(textSample)) docType = 'SEC Filing';
+
+  // Build citation based on what we found
+  if (vsMatch) {
+    const plaintiff = vsMatch[1].trim().replace(/\s+/g, ' ').slice(0, 50);
+    const defendant = vsMatch[2].trim().replace(/\s+/g, ' ').slice(0, 50);
+
+    let citation = `${plaintiff} v. ${defendant}`;
+
+    if (caseNoMatch) {
+      citation += `, No. ${caseNoMatch[1]}`;
+    }
+
+    if (court) {
+      citation += ` (${court} ${year})`;
+    } else {
+      citation += ` (${year})`;
+    }
+
+    return citation;
+  }
+
+  // Resume/CV detection
+  if (docType === 'Resume' || /\bj\.?d\.?\b/i.test(textSample) && /\bl\.?l\.?m\.?\b/i.test(textSample)) {
+    const nameMatch = textSample.match(/^[\s\n]*([A-Z][a-z]+(?:\s+[A-Z]\.?)?\s+[A-Z][a-z]+)/m);
+    if (nameMatch) {
+      return `${nameMatch[1].trim()}, Professional Resume (${year})`;
+    }
+  }
+
+  // SEC filing detection
+  if (/form\s+10-?k/i.test(textSample)) {
+    const companyMatch = textSample.match(/([A-Z][A-Za-z\s,.'&]+(?:Inc|Corp|LLC|Ltd)\.?)/);
+    if (companyMatch) {
+      return `${companyMatch[1].trim()}, Form 10-K (${year})`;
+    }
+  }
+
+  // Generic fallback with meaningful description
+  const cleanFilename = filename.replace(/\.pdf$/i, '').replace(/[_-]/g, ' ');
+
+  if (docType) {
+    return `${docType}, Document ${cleanFilename} (${year})`;
+  }
+
+  // Try to get a title from the document
+  const titleMatch = textSample.match(/^[\s\n]*(?:IN THE|UNITED STATES|STATE OF)?[\s\n]*([A-Z][A-Z\s]+)/m);
+  if (titleMatch && titleMatch[1].length > 10) {
+    const title = titleMatch[1].trim().slice(0, 60);
+    return `${title} (${year})`;
+  }
+
+  return `Legal Document (${cleanFilename}), (${year})`;
 }
 
 // ============================================================
@@ -511,7 +821,9 @@ async function generateEmbedding(
   if (!modelId) throw new Error(`Embeddings model not available at ${endpoint}`);
 
   // Truncate text for 512-token model
-  const truncatedText = text.slice(0, 2000);
+  // Use 1500 chars to stay safely under 512 tokens
+  // (some text like URLs can have ~3.5 chars/token)
+  const truncatedText = text.slice(0, 1500);
 
   const response = await axios.post(
     `${endpoint}/v1/embeddings`,
@@ -539,8 +851,8 @@ async function generateBatchEmbeddings(
 
   if (!modelId) throw new Error(`Embeddings model not available at ${endpoint}`);
 
-  // Truncate all texts
-  const truncatedTexts = texts.map(t => t.slice(0, 2000));
+  // Truncate all texts (1500 chars to stay under 512 tokens)
+  const truncatedTexts = texts.map(t => t.slice(0, 1500));
 
   const response = await axios.post(
     `${endpoint}/v1/embeddings`,
@@ -662,24 +974,24 @@ async function processDocument(
   console.log(chalk.white.bold(`\n  Processing: ${filename}`));
 
   // Step 1: Convert PDF to images
-  console.log(chalk.gray('    [1/7] Converting PDF to images...'));
+  console.log(chalk.white('    [1/7] Converting PDF to images...'));
   const imagesDir = join(OUTPUT_DIR, 'images');
   mkdirSync(imagesDir, { recursive: true });
   const { paths: imagePaths, timeMs: pdfToImageMs } = await pdfToImages(pdfPath, imagesDir);
   console.log(chalk.green(`    OK ${imagePaths.length} pages in ${pdfToImageMs.toFixed(0)}ms`));
 
   // Step 2: Extract text with pdftotext
-  console.log(chalk.gray('    [2/7] Extracting PDF text (pdftotext)...'));
+  console.log(chalk.white('    [2/7] Extracting PDF text (pdftotext)...'));
   const { text: pdfText, timeMs: pdfTextMs } = await extractPdfTextNative(pdfPath);
   console.log(chalk.green(`    OK ${pdfText.length} chars in ${pdfTextMs.toFixed(0)}ms`));
 
   // Step 3: OCR all pages
-  console.log(chalk.gray('    [3/7] Running OCR on all pages...'));
+  console.log(chalk.white('    [3/7] Running OCR on all pages...'));
   const { ocrText, totalMs: ocrTotalMs } = await processOcrPages(imagePaths, services.ocrModelId);
   console.log(chalk.green(`    OK ${ocrText.length} chars in ${ocrTotalMs.toFixed(0)}ms`));
 
   // Step 4: Merge and correct text
-  console.log(chalk.gray('    [4/7] Merging and correcting text...'));
+  console.log(chalk.white('    [4/7] Merging and correcting text...'));
   const { mergedText, timeMs: mergeMs } = await mergeAndCorrectText(
     ocrText,
     pdfText,
@@ -688,12 +1000,12 @@ async function processDocument(
   console.log(chalk.green(`    OK ${mergedText.length} chars in ${mergeMs.toFixed(0)}ms`));
 
   // Step 5: Generate summary
-  console.log(chalk.gray('    [5/7] Generating summary...'));
+  console.log(chalk.white('    [5/7] Generating summary...'));
   const { summary, timeMs: summaryMs } = await generateSummary(mergedText, services.infModelId);
   console.log(chalk.green(`    OK ${summary.length} chars in ${summaryMs.toFixed(0)}ms`));
 
   // Step 6: Generate Blue Book citation
-  console.log(chalk.gray('    [6/7] Generating Blue Book citation...'));
+  console.log(chalk.white('    [6/7] Generating Blue Book citation...'));
   const { citation, timeMs: citationMs, reasoning } = await generateBluebookCitation(
     mergedText,
     filename,
@@ -703,7 +1015,7 @@ async function processDocument(
   console.log(chalk.cyan(`    Citation: ${citation}`));
 
   // Step 7: Generate embedding
-  console.log(chalk.gray('    [7/7] Generating embedding...'));
+  console.log(chalk.white('    [7/7] Generating embedding...'));
   const { embedding, timeMs: embeddingMs, endpoint } = await generateEmbedding(
     mergedText,
     services.useLB
@@ -778,41 +1090,116 @@ async function main() {
   const gpuInfo = getGpuInfo();
   if (gpuInfo.available) {
     console.log(chalk.green(`  GPU: ${gpuInfo.name}`));
-    console.log(chalk.gray(`  Memory: ${gpuInfo.memoryUsed} / ${gpuInfo.memoryTotal}`));
-    console.log(chalk.gray(`  Utilization: ${gpuInfo.utilization}`));
-    console.log(chalk.gray(`  CUDA: ${gpuInfo.cudaVersion}`));
+    console.log(chalk.white(`  Memory: ${gpuInfo.memoryUsed} / ${gpuInfo.memoryTotal}`));
+    console.log(chalk.white(`  Utilization: ${gpuInfo.utilization}`));
+    console.log(chalk.white(`  CUDA: ${gpuInfo.cudaVersion}`));
   } else {
     console.log(chalk.yellow('  GPU: Not available (CPU mode)'));
   }
   console.log('');
 
-  // Check services
+  // Check services - Spark-1
   console.log(chalk.white.bold('Service Discovery'));
   console.log(chalk.dim('-'.repeat(50)));
 
-  const embStatus = await checkService(EMBEDDINGS_URL, 'Embeddings');
-  const embLbStatus = await checkService(EMBEDDINGS_LB_URL, 'Embeddings LB');
-  const ocrStatus = await checkService(OCR_URL, 'OCR');
-  const infStatus = await checkService(INFERENCE_URL, 'Inference');
+  // Define all endpoints
+  const SPARK2_IP = '192.168.1.63';
+
+  const allEndpoints = {
+    spark1: {
+      embeddings1: { url: 'http://localhost:8001', name: 'Embeddings (8001)' },
+      embeddings2: { url: 'http://localhost:8002', name: 'Embeddings (8002)' },
+      ocr: { url: 'http://localhost:8003', name: 'OCR (8003)' },
+      inference: { url: 'http://localhost:8004', name: 'Inference (8004)' },
+    },
+    spark2: {
+      embeddings1: { url: `http://${SPARK2_IP}:8001`, name: 'Embeddings (8001)' },
+      embeddings2: { url: `http://${SPARK2_IP}:8002`, name: 'Embeddings (8002)' },
+      ocr: { url: `http://${SPARK2_IP}:8003`, name: 'OCR (8003)' },
+      inference: { url: `http://${SPARK2_IP}:8004`, name: 'Inference (8004)' },
+    },
+    loadBalancers: {
+      embeddings: { url: EMBEDDINGS_LB_URL, name: 'Embeddings LB (8000)' },
+      ocr: { url: OCR_LB_URL, name: 'OCR LB (8010)' },
+      inference: { url: INFERENCE_LB_URL, name: 'Inference LB (8020)' },
+    },
+  };
+
+  // Check Spark-1 services
+  console.log(chalk.cyan.bold('\n  Spark-1 (localhost)'));
+  const embStatus = await checkService(allEndpoints.spark1.embeddings1.url, 'Embeddings');
+  const emb2Status = await checkService(allEndpoints.spark1.embeddings2.url, 'Embeddings-2');
+  const ocrStatus = await checkService(allEndpoints.spark1.ocr.url, 'OCR');
+  const infStatus = await checkService(allEndpoints.spark1.inference.url, 'Inference');
 
   console.log(embStatus.healthy
-    ? chalk.green(`  [OK] Embeddings (${EMBEDDINGS_URL})`) + chalk.dim(` - ${embStatus.model}`)
-    : chalk.red(`  [X] Embeddings: not available`));
-  console.log(embLbStatus.healthy
-    ? chalk.green(`  [OK] Embeddings LB (${EMBEDDINGS_LB_URL})`) + chalk.dim(` - Load balanced`)
-    : chalk.dim(`  [--] Embeddings LB: not available`));
+    ? chalk.green(`    [OK] ${allEndpoints.spark1.embeddings1.name}`) + chalk.dim(` - ${embStatus.model}`)
+    : chalk.dim(`    [--] ${allEndpoints.spark1.embeddings1.name}`));
+  console.log(emb2Status.healthy
+    ? chalk.green(`    [OK] ${allEndpoints.spark1.embeddings2.name}`) + chalk.dim(` - ${emb2Status.model}`)
+    : chalk.dim(`    [--] ${allEndpoints.spark1.embeddings2.name}`));
   console.log(ocrStatus.healthy
-    ? chalk.green(`  [OK] OCR (${OCR_URL})`) + chalk.dim(` - ${ocrStatus.model}`)
-    : chalk.red(`  [X] OCR: not available`));
+    ? chalk.green(`    [OK] ${allEndpoints.spark1.ocr.name}`) + chalk.dim(` - ${ocrStatus.model}`)
+    : chalk.dim(`    [--] ${allEndpoints.spark1.ocr.name}`));
   console.log(infStatus.healthy
-    ? chalk.green(`  [OK] Inference (${INFERENCE_URL})`) + chalk.dim(` - ${infStatus.model}`)
-    : chalk.red(`  [X] Inference: not available`));
+    ? chalk.green(`    [OK] ${allEndpoints.spark1.inference.name}`) + chalk.dim(` - ${infStatus.model}`)
+    : chalk.dim(`    [--] ${allEndpoints.spark1.inference.name}`));
+
+  // Check Spark-2 services
+  console.log(chalk.cyan.bold(`\n  Spark-2 (${SPARK2_IP})`));
+  const spark2EmbStatus = await checkService(allEndpoints.spark2.embeddings1.url, 'Embeddings');
+  const spark2Emb2Status = await checkService(allEndpoints.spark2.embeddings2.url, 'Embeddings-2');
+  const spark2OcrStatus = await checkService(allEndpoints.spark2.ocr.url, 'OCR');
+  const spark2InfStatus = await checkService(allEndpoints.spark2.inference.url, 'Inference');
+
+  console.log(spark2EmbStatus.healthy
+    ? chalk.green(`    [OK] ${allEndpoints.spark2.embeddings1.name}`) + chalk.dim(` - ${spark2EmbStatus.model}`)
+    : chalk.dim(`    [--] ${allEndpoints.spark2.embeddings1.name}`));
+  console.log(spark2Emb2Status.healthy
+    ? chalk.green(`    [OK] ${allEndpoints.spark2.embeddings2.name}`) + chalk.dim(` - ${spark2Emb2Status.model}`)
+    : chalk.dim(`    [--] ${allEndpoints.spark2.embeddings2.name}`));
+  console.log(spark2OcrStatus.healthy
+    ? chalk.green(`    [OK] ${allEndpoints.spark2.ocr.name}`) + chalk.dim(` - ${spark2OcrStatus.model}`)
+    : chalk.dim(`    [--] ${allEndpoints.spark2.ocr.name}`));
+  console.log(spark2InfStatus.healthy
+    ? chalk.green(`    [OK] ${allEndpoints.spark2.inference.name}`) + chalk.dim(` - ${spark2InfStatus.model}`)
+    : chalk.dim(`    [--] ${allEndpoints.spark2.inference.name}`));
+
+  // Check load balancers
+  console.log(chalk.cyan.bold('\n  Load Balancers (Traefik)'));
+  const embLbStatus = await checkService(EMBEDDINGS_LB_URL, 'Embeddings LB');
+  const ocrLbStatus = await checkService(OCR_LB_URL, 'OCR LB');
+  const infLbStatus = await checkService(INFERENCE_LB_URL, 'Inference LB');
+
+  console.log(embLbStatus.healthy
+    ? chalk.green(`    [OK] Embeddings LB (8000)`)
+    : chalk.dim(`    [--] Embeddings LB`));
+  console.log(ocrLbStatus.healthy
+    ? chalk.green(`    [OK] OCR LB (8010)`)
+    : chalk.dim(`    [--] OCR LB`));
+  console.log(infLbStatus.healthy
+    ? chalk.green(`    [OK] Inference LB (8020)`)
+    : chalk.dim(`    [--] Inference LB`));
+
+  // Find active inference endpoint (prefer LB if available)
+  let infEndpoint: { url: string; host: string } | null = null;
+  if (infLbStatus.healthy) {
+    activeInferenceUrl = INFERENCE_LB_URL;
+    infEndpoint = { url: INFERENCE_LB_URL, host: 'Traefik LB' };
+  } else {
+    infEndpoint = await findInferenceEndpoint();
+  }
+
+  if (infEndpoint) {
+    console.log(chalk.cyan.bold(`\n  Active Inference: ${infEndpoint.host}`));
+  }
   console.log('');
 
   // Validate required services
-  if (!ocrStatus.healthy || !infStatus.healthy || !embStatus.healthy) {
+  if (!ocrStatus.healthy || !infEndpoint || !embStatus.healthy) {
     console.log(chalk.red('Required services not available. Start the vLLM Hydra cluster:'));
-    console.log(chalk.gray('  docker compose --profile gpt-oss up -d'));
+    console.log(chalk.white('  docker compose --profile gpt-oss up -d'));
+    console.log(chalk.white('  # Or ensure spark-2 inference is running'));
     process.exit(1);
   }
 
@@ -827,7 +1214,7 @@ async function main() {
   } else {
     if (!existsSync(FILES_DIR)) {
       console.log(chalk.red(`Files directory not found: ${FILES_DIR}`));
-      console.log(chalk.gray('  Create the directory and add PDF files'));
+      console.log(chalk.white('  Create the directory and add PDF files'));
       process.exit(1);
     }
     pdfFiles = readdirSync(FILES_DIR)
@@ -837,16 +1224,19 @@ async function main() {
 
   if (pdfFiles.length === 0) {
     console.log(chalk.yellow('No PDF files found'));
-    console.log(chalk.gray(`  Add PDFs to: ${FILES_DIR}`));
+    console.log(chalk.white(`  Add PDFs to: ${FILES_DIR}`));
     process.exit(1);
   }
 
   console.log(chalk.white.bold(`Processing ${pdfFiles.length} PDF(s)`));
   console.log(chalk.dim('-'.repeat(50)));
 
+  // Get inference model ID from active endpoint
+  const infModelId = await getModelId(activeInferenceUrl);
+
   const services = {
     ocrModelId: ocrStatus.model!,
-    infModelId: infStatus.model!,
+    infModelId: infModelId!,
     useLB: useLB && embLbStatus.healthy,
   };
 
@@ -863,7 +1253,7 @@ async function main() {
       // Save individual report
       const reportPath = join(OUTPUT_DIR, `${basename(pdfPath, '.pdf')}-report.md`);
       writeFileSync(reportPath, generateMarkdownReport(result));
-      console.log(chalk.gray(`    Report saved: ${reportPath}`));
+      console.log(chalk.white(`    Report saved: ${reportPath}`));
 
     } catch (error) {
       console.log(chalk.red(`    Error: ${error instanceof Error ? error.message : error}`));
@@ -885,24 +1275,24 @@ async function main() {
   console.log(chalk.white.bold('Documents Processed:'));
   for (const r of results) {
     console.log(`  ${chalk.green(r.filename)}`);
-    console.log(chalk.gray(`    Pages: ${r.pageCount} | Citation: ${r.bluebookCitation.slice(0, 60)}...`));
+    console.log(chalk.white(`    Pages: ${r.pageCount} | Citation: ${r.bluebookCitation.slice(0, 60)}...`));
   }
   console.log('');
 
   console.log(chalk.white.bold('Performance Metrics:'));
-  console.log(chalk.gray(`  Documents: ${results.length}`));
-  console.log(chalk.gray(`  Total pages: ${totalPages}`));
-  console.log(chalk.gray(`  Total time: ${(overallTime / 1000).toFixed(1)}s`));
-  console.log(chalk.gray(`  Avg OCR/page: ${avgOcrPerPage.toFixed(0)}ms`));
-  console.log(chalk.gray(`  Throughput: ${(totalPages / (overallTime / 1000)).toFixed(2)} pages/sec`));
+  console.log(chalk.white(`  Documents: ${results.length}`));
+  console.log(chalk.white(`  Total pages: ${totalPages}`));
+  console.log(chalk.white(`  Total time: ${(overallTime / 1000).toFixed(1)}s`));
+  console.log(chalk.white(`  Avg OCR/page: ${avgOcrPerPage.toFixed(0)}ms`));
+  console.log(chalk.white(`  Throughput: ${(totalPages / (overallTime / 1000)).toFixed(2)} pages/sec`));
 
   // GPU benchmark summary
   if (runBenchmark && gpuInfo.available) {
     console.log('');
     console.log(chalk.white.bold('GPU Benchmark:'));
     const finalGpu = getGpuInfo();
-    console.log(chalk.gray(`  Peak memory: ${finalGpu.memoryUsed}`));
-    console.log(chalk.gray(`  Final utilization: ${finalGpu.utilization}`));
+    console.log(chalk.white(`  Peak memory: ${finalGpu.memoryUsed}`));
+    console.log(chalk.white(`  Final utilization: ${finalGpu.utilization}`));
   }
 
   // Search if query provided
@@ -925,10 +1315,10 @@ async function main() {
 
     for (let i = 0; i < searchResults.length; i++) {
       const r = searchResults[i];
-      const scoreColor = r.score > 0.7 ? chalk.green : r.score > 0.5 ? chalk.yellow : chalk.gray;
+      const scoreColor = r.score > 0.7 ? chalk.green : r.score > 0.5 ? chalk.yellow : chalk.white;
       console.log(`${i + 1}. ${scoreColor(`${(r.score * 100).toFixed(1)}%`)} - ${r.filename}`);
       console.log(chalk.cyan(`   ${r.citation}`));
-      console.log(chalk.gray(`   ${r.summary}...`));
+      console.log(chalk.white(`   ${r.summary}...`));
       console.log('');
     }
   }
@@ -955,7 +1345,7 @@ async function main() {
   }, null, 2));
 
   console.log('');
-  console.log(chalk.gray(`Results saved: ${resultsPath}`));
+  console.log(chalk.white(`Results saved: ${resultsPath}`));
   console.log(chalk.cyan.bold('\n' + '='.repeat(80)));
   console.log(chalk.green.bold('                    Pipeline Complete'));
   console.log(chalk.cyan.bold('='.repeat(80) + '\n'));
