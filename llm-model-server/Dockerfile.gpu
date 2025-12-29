@@ -1,0 +1,28 @@
+# LLM Model Server - GPU Variant
+# Uses NVIDIA's vLLM container for CUDA support on Grace Hopper (GB10) / DGX Spark
+FROM nvcr.io/nvidia/vllm:25.12-py3
+
+WORKDIR /app
+
+# Install additional dependencies (PyTorch + CUDA from base image)
+COPY requirements.gpu.txt /app/requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy application code
+COPY src/ /app/
+
+# Set environment variables
+ENV PYTHONUNBUFFERED=1
+ENV MODEL_CACHE_DIR=/models
+ENV PORT=8006
+ENV EXECUTION_PROVIDER=cuda
+
+# Expose port
+EXPOSE 8006
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+    CMD curl -f http://localhost:8006/health || exit 1
+
+# Run the service
+CMD ["python", "main.py"]

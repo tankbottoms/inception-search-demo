@@ -1,0 +1,25 @@
+# vLLM Hydra Client
+# Demo and benchmark client for vLLM Hydra services
+
+FROM oven/bun:1-alpine
+
+RUN apk add --no-cache \
+    curl \
+    jq
+
+WORKDIR /app
+
+# Copy package files
+COPY client/package.json client/bun.lockb* ./
+
+# Install dependencies
+RUN bun install --frozen-lockfile || bun install
+
+# Copy client source
+COPY client/ ./
+
+# Create output directory
+RUN mkdir -p /output /files
+
+ENTRYPOINT ["bun", "run", "src/index.ts"]
+CMD ["demo"]

@@ -98,6 +98,21 @@ temp/
 # Except sample/demo files
 !client/files/*.pdf
 !client/files/*.md
+!demo/files/*.pdf
+!demo/files/*.md
+
+# ONNX models (downloaded at runtime)
+models/*.onnx
+models/*/model.onnx
+models/*/tokenizer/
+!models/registry.json
+
+# Demo output
+demo/output/*.md
+demo/output/*.json
+demo/logs/*.json
+!demo/logs/.gitkeep
+!demo/output/.gitkeep
 
 # OS files
 .DS_Store
@@ -149,5 +164,8 @@ tasks/
 .claude
 .claude/settings.local.json
 .osgrep
+
+# Backup folder (legacy code moved here before deletion)
+backup/
 # Large files (>50MB) - use Git LFS if needed
 client/files/ef231bdd2d571422.pdf

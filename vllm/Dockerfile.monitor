@@ -1,0 +1,32 @@
+# vLLM Hydra Monitor Service
+# Provides cron-based health monitoring and auto-restart for vLLM services
+
+FROM alpine:3.19
+
+RUN apk add --no-cache \
+    bash \
+    curl \
+    jq \
+    docker-cli \
+    tzdata
+
+# Set timezone
+ENV TZ=UTC
+
+# Create directories
+RUN mkdir -p /var/log/vllm-hydra /scripts /app
+
+# Copy monitor script
+COPY scripts/hydra-monitor.sh /scripts/hydra-monitor.sh
+RUN chmod +x /scripts/hydra-monitor.sh
+
+# Create cron job
+RUN echo "* * * * * /scripts/hydra-monitor.sh --cron >> /var/log/vllm-hydra/monitor.log 2>&1" > /etc/crontabs/root
+
+# Create entrypoint
+COPY scripts/monitor-entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+WORKDIR /app
+
+ENTRYPOINT ["/entrypoint.sh"]

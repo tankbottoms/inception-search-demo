@@ -2,7 +2,94 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased]
+## [2.6.0] - 2025-12-29
+
+### Added
+
+- **vLLM Hydra Production Stack** - Full GPU inference with vLLM
+  - Multi-model Docker Compose stack (ModernBERT + HunyuanOCR + GPT-OSS)
+  - Traefik load balancer across 4 embedding backends
+  - Multi-node deployment (spark-1 + spark-2)
+  - 14-test verification suite with 100% pass rate
+  - Comprehensive stability benchmark (52/52 documents passing)
+
+- **Documentation Updates**
+  - Updated README with vLLM Hydra as primary production option
+  - Comprehensive API documentation for OpenAI-compatible endpoints
+  - Service port reference table
+  - Platform detection documentation
+
+- **Tesseract OCR** - CPU fallback OCR provider
+
+### Changed
+
+- **Project Structure** - Removed deprecated `python-gpu-service/` folder
+- **README** - Reorganized with two deployment options (vLLM vs ONNX)
+- **API Documentation** - Updated to show vLLM endpoints as primary
+
+### Performance
+
+| Metric | Value |
+|--------|-------|
+| Embeddings throughput | 640+ req/s (single), 1,400+ req/s (LB) |
+| OCR per page | ~280ms |
+| Inference | 44 tokens/sec |
+| Stability | 52/52 documents (100% pass) |
+
+---
+
+## [2.5.0] - 2025-12-28
+
+### Added
+
+- **ONNX TypeScript Backend** - Development/CPU inference server
+  - Hono server with TypeScript/Bun
+  - Platform detection (CPU/GPU auto-detect)
+  - ONNX Runtime integration
+  - Model registry system
+
+- **vLLM Hydra v2.5.0** - See [vllm/CHANGELOG.md](vllm/CHANGELOG.md)
+  - Comprehensive stability benchmark
+  - Expanded Blue Book citation generation
+  - Summary generation via GPT-OSS
+
+---
+
+## [Unreleased] - feature/onnx-typescript-backend
+
+### Added
+
+- New TypeScript/Bun inference backend using ONNX Runtime
+- Multi-platform support: ARM64 CPU (Apple Silicon) and ARM64 + CUDA (DGX Spark)
+- Model registry system with JSON configuration (`models/registry.json`)
+- Hardware auto-detection for execution provider selection
+- Python ONNX conversion service (fallback for models without ONNX on HuggingFace)
+- CLI modes: `--check` for model validation, `--benchmark` for performance comparison
+- vLLM distributed inference configuration for dual DGX Spark nodes
+- Comprehensive instrumentation and benchmark reporting
+- OCR providers: Mistral API, HunyuanOCR, Tesseract
+- Output files: `{hash}.ocr.md` and `{hash}.bert.json` naming convention
+
+### Changed
+
+- Restructured project for TypeScript-first development
+- New directory structure with `src/`, `demo/`, `vllm/`, `llm-model-server/`
+
+### Removed
+
+- Legacy Python/FastAPI implementation (`backup/` folder)
+- `python-gpu-service/` folder (replaced by vLLM Hydra)
+- Docker Compose legacy profile (was using backup/inception)
+- DeepSeek-OCR (not compatible with ONNX)
+
+### Technical Details
+
+- Backend: Hono (TypeScript) + ONNX Runtime
+- Tokenization: Transformers.js
+- Model: freelawproject/modernbert-embed-base_finetune_512 (768-dim embeddings)
+- Pooling: Mean pooling with L2 normalization
+
+---
 
 ## [2025-12-24] - Search Quality & Cleanup
 

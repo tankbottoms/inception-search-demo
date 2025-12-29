@@ -1,0 +1,88 @@
+# Traefik Dynamic Configuration
+# Load balancing for vLLM Hydra services across spark-1 and spark-2
+#
+# Load Balanced Endpoints:
+#   - http://localhost:8000 - Embeddings (spark-1:8001, spark-1:8002, spark-2:8001, [spark-2:8002 optional])
+#   - http://localhost:8010 - OCR (spark-1:8003, spark-2:8003)
+#   - http://localhost:8020 - Inference (spark-1:8004, spark-2:8004)
+#
+# Nodes:
+#   - spark-1: 192.168.1.76 (localhost/host.docker.internal)
+#   - spark-2: 192.168.1.63
+
+http:
+  # Routers
+  routers:
+    embeddings:
+      rule: "PathPrefix(`/`)"
+      entryPoints:
+        - embeddings
+      service: inception-embeddings-lb
+      middlewares:
+        - retry
+
+    ocr:
+      rule: "PathPrefix(`/`)"
+      entryPoints:
+        - ocr
+      service: ocr-lb
+      middlewares:
+        - retry
+
+    inference:
+      rule: "PathPrefix(`/`)"
+      entryPoints:
+        - inference
+      service: inference-lb
+      middlewares:
+        - retry
+
+  # Services with load balancing
+  services:
+    inception-embeddings-lb:
+      loadBalancer:
+        healthCheck:
+          path: /health
+          interval: 10s
+          timeout: 3s
+        servers:
+          # Spark-1 replicas
+          - url: "http://host.docker.internal:8001"
+          - url: "http://host.docker.internal:8002"
+          # Spark-2 workers
+          - url: "http://192.168.1.63:8001"
+          - url: "http://192.168.1.63:8002"
+        passHostHeader: false
+
+    ocr-lb:
+      loadBalancer:
+        healthCheck:
+          path: /health
+          interval: 10s
+          timeout: 5s
+        servers:
+          # Spark-1 OCR
+          - url: "http://host.docker.internal:8003"
+          # Spark-2 OCR
+          - url: "http://192.168.1.63:8003"
+        passHostHeader: false
+
+    inference-lb:
+      loadBalancer:
+        healthCheck:
+          path: /health
+          interval: 10s
+          timeout: 5s
+        servers:
+          # Spark-1 inference (may be offline)
+          - url: "http://host.docker.internal:8004"
+          # Spark-2 inference
+          - url: "http://192.168.1.63:8004"
+        passHostHeader: false
+
+  # Middlewares
+  middlewares:
+    retry:
+      retry:
+        attempts: 2
+        initialInterval: 100ms

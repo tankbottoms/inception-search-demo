@@ -1,628 +1,440 @@
-# Inception Demo - Document OCR and Semantic Search
+# Inception Search Demo
 
-A complete document processing and semantic search system combining **Mistral OCR**, **Free Law Project Inception embeddings**, and **vector similarity search**.
-
-[Free Law Project Inception](https://github.com/freelawproject/inception/) provides a fine-tuned model based on their unprecedented database of legal documents. The transformer model is **freelawproject/modernbert-embed-base_finetune_512**. This repository demonstrates its capabilities on macOS M1 (CPU) and NVIDIA DGX Spark (GPU with CUDA).
-
-From the [Free Law Project Inception](https://github.com/freelawproject/inception/) documentation:
-
-> Inception is our microservice for generating embeddings from blocks of text.
->
-> It is a high-performance FastAPI service that generates text embeddings using SentenceTransformers, specifically designed for processing legal documents and search queries. The service efficiently handles both short search queries and lengthy court opinions, generating semantic embeddings that can be used for document similarity matching and semantic search applications. It includes support for GPU acceleration when available.
->
-> The service is optimized to handle two main use cases:
->
-> - Embedding search queries: Quick, CPU-based processing for short search queries
-> - Embedding court opinions: NVIDIA CUDA GPU-accelerated processing for longer legal documents, with intelligent text chunking to maintain context
-
-
-## Quickstart
-
-Get up and running in under a minute.
-
-### Quick Start (3 Commands)
-
-```bash
-# 1. Configure environment
-cp .env.example .env
-# Edit .env and add your MISTRAL_OCR_API_KEY
-
-# 2. Build and start services
-docker compose build client && docker compose up -d inception-cpu
-
-# 3. Run full demo with all files
-docker compose run --rm client demo --pdf-count 0
-```
-
-### Individual Commands
-
-```bash
-# Build client image (required after code changes)
-docker compose build client
-
-# Start embedding server (Apple Silicon / ARM64)
-docker compose up -d inception-cpu
-
-# Start embedding server (NVIDIA GPU)
-docker compose --profile gpu up -d inception-gpu
-
-# Run demo with 1 file (quick test)
-docker compose run --rm client demo
-
-# Run demo with all files
-docker compose run --rm client demo --pdf-count 0
-
-# Run demo with custom query
-docker compose run --rm client demo --pdf-count 0 "securities fraud"
-
-# Check server status
-docker compose ps
-
-# View server logs
-docker compose logs -f inception-cpu
-
-# Stop all services
-docker compose down
-```
-
-### Automated Script
-
-```bash
-# Clone and run the demo
-git clone https://github.com/your-repo/inception-demo.git
-cd inception-demo
-cp .env.example .env
-# Edit .env and add your MISTRAL_OCR_API_KEY
-./test-docker-stack.sh
-```
-
-The script automatically detects your platform (Apple Silicon M1/M2/M3 or NVIDIA GPU) and runs the appropriate backend.
-
+> Multi-platform document processing with OCR, embeddings, and semantic search
 
 ## Overview
 
-This demo showcases:
+A comprehensive document processing pipeline featuring:
 
-- **Mistral OCR API** - Converts PDFs and images to markdown ($2 per 1,000 pages, requires API key)
-- **Inception Embedding Service** - Generates vector embeddings using ModernBERT (Docker service for CPU and GPU)
-- **Semantic Search** - Finds relevant content using cosine similarity
-- **Doctor Service** - Additional document processing capabilities from Free Law Project (untested)
-- **CLI Tools** - Simple command-line client application for demos
+- **OCR**: Extract text from PDFs using HunyuanOCR (GPU) or Tesseract (CPU)
+- **Embeddings**: Generate semantic embeddings using ModernBERT
+- **Inference**: Chain-of-thought reasoning with GPT-OSS 20B
+- **Search**: Cosine similarity semantic search
 
-## Features
+Two deployment options are available:
 
-- **Multi-format OCR**: PDFs, images, Office documents (via Mistral)
-- **Semantic Search**: Context-aware document retrieval using a state-of-the-art fine-tuned model
-- **PDF Text Comparison**: Extracts embedded PDF text and compares with OCR output (similarity %)
-- **Docker-based**: Complete containerized stack
-- **Platform Detection**: Automatic selection of CPU or GPU backend (Apple Silicon, NVIDIA)
-- **OCR Export**: Saves OCR output as `.ocr.md` markdown files
-- **Benchmark Statistics**: Detailed timing, performance metrics, and system detection
-- **Privacy-Safe Benchmarks**: File names hashed with SHA256 for sharing
+| Option | Use Case | Stack | Documentation |
+|--------|----------|-------|---------------|
+| **vLLM Hydra** | Production GPU inference | vLLM + Docker | [vllm/README.md](vllm/README.md) |
+| **ONNX Backend** | Development / CPU | TypeScript + ONNX | This file |
 
+**Target Platforms**:
 
-## Prerequisites
+| Platform | Provider | Notes |
+|----------|----------|-------|
+| NVIDIA DGX Spark | vLLM + CUDA | Production recommended (ARM64 + GB200) |
+| Apple Silicon (M1-M5) | CPUExecutionProvider | ARM64 CPU inference |
+| Generic ARM64/x64 | CPUExecutionProvider | Fallback CPU |
 
-- [Docker](https://www.docker.com/) and [Docker Compose](https://docs.docker.com/compose/)
-- [Bun](https://bun.sh/) (optional, for local development)
-- Mistral API Key (get one at [https://mistral.ai](https://mistral.ai))
+## Models
 
+| Model | Type | Status | Provider |
+|-------|------|--------|----------|
+| `freelawproject/modernbert-embed-base_finetune_512` | Embedding | Active | vLLM |
+| `tencent/HunyuanOCR` | OCR | Active | vLLM |
+| `openai/gpt-oss-20b` | Inference | Active | vLLM |
+| Tesseract | OCR | Active | CPU fallback |
 
-## Usage
+## Directory Structure
 
-### Command Reference
-
-The CLI provides four main commands.
-
-#### 1. `demo` - Run Full Demo
-
-Index files in the `files/` directory and perform a semantic search.
-
-```bash
-# Default: index 1 random file and search for "fraud"
-docker compose run --rm client demo
-
-# Index all files (use --pdf-count 0)
-docker compose run --rm client demo --pdf-count 0
-
-# Custom file count and query
-docker compose run --rm client demo --pdf-count 5 "securities fraud"
-
-# Add a specific file to the demo
-docker compose run --rm client demo /path/to/document.pdf "custom query"
+```
+/
+├── src/                        # TypeScript/Bun inference backend
+│   ├── index.ts                # Hono server entry
+│   ├── config.ts               # Settings (ENV + JSON)
+│   ├── cli.ts                  # CLI: --check, --benchmark
+│   ├── routes/
+│   │   ├── embed.ts            # /api/v1/embed/*
+│   │   ├── ocr.ts              # /api/v1/ocr/*
+│   │   └── health.ts           # /health, /metrics
+│   ├── services/
+│   │   ├── model-registry.ts   # Model resolution logic
+│   │   ├── model-loader.ts     # ONNX session management
+│   │   ├── embedding.ts        # Embedding generation
+│   │   └── ocr/
+│   │       ├── index.ts        # OCR router
+│   │       ├── mistral.ts      # Mistral OCR API
+│   │       ├── tesseract.ts    # Tesseract CPU fallback
+│   │       └── pdf-utils.ts    # PDF processing utilities
+│   └── instrumentation/
+│       ├── metrics.ts          # Prometheus metrics
+│       └── logger.ts           # Structured logging
+│
+├── vllm/                       # vLLM Hydra (production GPU stack)
+│   ├── README.md               # Comprehensive vLLM documentation
+│   ├── Makefile                # All operations via make commands
+│   ├── docker-compose.yml      # Main stack (spark-1)
+│   ├── docker-compose.spark2.yml  # Multi-node (spark-2)
+│   ├── traefik/                # Load balancer configuration
+│   │   ├── traefik.yml
+│   │   └── dynamic.yml
+│   ├── client/                 # TypeScript demo client
+│   │   ├── src/
+│   │   │   ├── index.ts        # CLI commands
+│   │   │   ├── cot-demo.ts     # Chain-of-thought demo
+│   │   │   ├── verify-demo.ts  # Verification suite
+│   │   │   ├── stress-test.ts  # Load testing
+│   │   │   └── ocr-pipeline.ts # OCR pipeline
+│   │   └── package.json
+│   ├── scripts/
+│   │   ├── hydra-start.sh      # Smart startup
+│   │   ├── sync-spark2.sh      # Multi-node sync
+│   │   └── verify-services.sh  # Health monitoring
+│   ├── CHANGELOG.md
+│   └── TODO.md
+│
+├── llm-model-server/           # Python embedding server
+│   ├── Dockerfile.cpu
+│   ├── Dockerfile.gpu
+│   └── src/
+│       └── main.py             # FastAPI server
+│
+├── demo/                       # Demo client
+│   ├── files/                  # Sample PDFs
+│   ├── output/                 # Generated outputs
+│   └── logs/                   # Benchmark sessions
+│
+├── models/                     # Model cache (mounted volume)
+│
+├── scripts/
+│   ├── startup.sh              # Main entry (auto-detect platform)
+│   ├── detect-platform.sh      # Platform detection
+│   ├── benchmark-cpu-gpu.sh    # CPU vs GPU comparison
+│   └── verify-pipeline.sh      # Pipeline verification
+│
+├── Dockerfile                  # CPU build
+├── docker-compose.yml          # ONNX backend services
+├── Makefile                    # Simplified commands
+├── package.json
+├── README.md                   # This file
+├── CHANGELOG.md
+└── TODO.md
 ```
 
-The demo extracts embedded PDF text before OCR and displays comparison statistics showing how similar the raw text is to the OCR output.
+## Quick Start
 
-#### 2. `index` - Index Documents
+### Option 1: vLLM Hydra (Production GPU - Recommended)
 
-Index a single file or directory of documents.
-
-```bash
-# Index a single PDF
-docker compose run --rm client index "files/document.pdf"
-
-# Index entire directory (all files)
-docker compose run --rm client index "files/"
-
-# Index only 5 random files from directory
-docker compose run --rm client index "files/" --pdf-count 5
-
-# Local development
-cd client
-export MISTRAL_OCR_API_KEY="your-key"
-bun run src/index.ts index "files/" --pdf-count 3
-```
-
-**Supported formats**: PDF, PNG, JPG, DOCX, PPTX, TXT, MD
-
-See [Mistral OCR Documentation](https://docs.mistral.ai/capabilities/document_ai/basic_ocr) for details.
-
-#### 3. `search` - Search Indexed Documents
-
-Search previously indexed documents using semantic similarity.
+For NVIDIA DGX Spark or other CUDA GPUs:
 
 ```bash
-# Search existing index
-docker compose run --rm client search "defamation"
+cd vllm
 
-# Local development
-bun run src/index.ts search "fraud allegations"
+# Start all services (embeddings + OCR + inference + load balancer)
+make up-all
+
+# Check service health
+make health
+
+# Run verification tests (14 tests)
+make test
+
+# Run chain-of-thought demo
+make demo-cot-quick
+
+# Stop all services
+make down
 ```
 
-#### 4. `run` - Index and Search in One Command
+See [vllm/README.md](vllm/README.md) for comprehensive documentation.
 
-Index a single file and immediately search it.
+### Option 2: ONNX Backend (Development / CPU)
+
+For local development or CPU-only environments:
 
 ```bash
-# Index and search
-docker compose run --rm client run "files/report.pdf" "key findings"
+# Prerequisites: Bun >= 1.0, Docker
 
-# File outside files/ directory (auto-copies)
-docker compose run --rm client run "/tmp/document.pdf" "search term"
+# Install dependencies
+bun install
+
+# Start server
+bun run dev
+
+# Run demo
+cd demo && bun run demo
 ```
 
+### Platform Detection
 
-## Benchmarking
-
-The demo includes comprehensive benchmarking to compare performance across different systems.
-
-### Running Benchmarks
+The system auto-detects your platform:
 
 ```bash
-# Run demo with benchmarking (default: 1 file for quick test)
-docker compose run --rm client demo
+# Show platform info
+./scripts/detect-platform.sh all
 
-# Run with more files for accurate benchmarks
-docker compose run --rm client demo --pdf-count 5
-
-# Run with all files
-docker compose run --rm client demo --pdf-count 0
-
-# Skip saving benchmark (--no-save)
-docker compose run --rm client demo --no-save
+# Or via make
+make status
 ```
 
-### Benchmark Output
+## Model Resolution Flow
 
-Each demo run outputs:
+```
+1. Check local cache (/models/*.onnx)
+   └── Found? → Load → Ready
 
-- **System Information**: Platform (with Docker detection), CPU model, cores, memory, GPU
-- **Sample Summary**: Files processed, total size, pages, characters, chunks
-- **Timing Summary**: Total duration, OCR time, embedding time (with percentages)
-- **OCR Performance**: Average/fastest/slowest times, throughput (chars/sec)
-- **Embedding Performance**: Average/fastest/slowest times, chars/sec, tokens/sec
-- **Time Projections**: Estimated time per 100/1000 chars, per 1MB/100MB/1GB
-- **Text Comparison**: Raw PDF text vs OCR output with similarity percentage
-- **Per-File Details**: Hash, size, pages, raw chars, OCR chars, similarity, embed time, chunks
+2. Check HuggingFace for ONNX files
+   └── Found? → Download → Cache → Ready
 
-### Comparing Systems
+3. Fallback: Python conversion service
+   └── Download .safetensors → Convert → Cache → Ready
+```
 
-After running benchmarks on multiple machines, compare results:
+## Output Files
+
+The demo client processes PDFs and generates:
+
+| File | Description |
+|------|-------------|
+| `output/{hash}.ocr.md` | OCR extracted text in markdown |
+| `output/{hash}.bert.json` | Embedding vectors with metadata |
+| `logs/{timestamp}.json` | Benchmark session data |
+
+## API Endpoints
+
+### vLLM Hydra (OpenAI-compatible)
+
+All services expose OpenAI-compatible APIs:
 
 ```bash
-# Analyze all sessions in logs/
-docker compose run --rm client benchmark
+# Embeddings (port 8001, or 8000 for load balanced)
+curl http://localhost:8001/v1/embeddings \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "freelawproject/modernbert-embed-base_finetune_512",
+    "input": "Your text to embed"
+  }'
 
-# Or analyze a specific folder
-docker compose run --rm client benchmark /path/to/logs
+# OCR via HunyuanOCR (port 8003, or 8010 for load balanced)
+curl http://localhost:8003/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "tencent/HunyuanOCR",
+    "messages": [{
+      "role": "user",
+      "content": [
+        {"type": "text", "text": "Extract all text from this image"},
+        {"type": "image_url", "image_url": {"url": "data:image/png;base64,..."}}
+      ]
+    }],
+    "max_tokens": 4096
+  }'
+
+# Inference via GPT-OSS (port 8004, or 8020 for load balanced)
+curl http://localhost:8004/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "openai/gpt-oss-20b",
+    "messages": [{"role": "user", "content": "What is 15 + 28?"}],
+    "max_tokens": 512
+  }'
+
+# Health check (all services)
+curl http://localhost:8001/health
+curl http://localhost:8003/health
+curl http://localhost:8004/health
 ```
 
-The analyzer outputs:
+### ONNX Backend (Development)
 
-- Session overview with unique systems detected
-- Performance comparison table
-- Rankings (fastest OCR, fastest embedding, fastest overall)
-- Speedup ratios between best and worst performers
-- System-specific analysis when multiple systems detected
-- Recommendations for optimization
+```bash
+# Embedding
+curl -X POST http://localhost:8005/api/v1/embed/query \
+  -H "Content-Type: application/json" \
+  -d '{"text": "search query here"}'
 
-### Session Files
+# Health check
+curl http://localhost:8005/health
+```
 
-Benchmark sessions are saved to `logs/` with format `YYYYMMDD-HHMMSS.json`:
+## Instrumentation
 
-```json
-{
-  "sessionId": "20251224-170213",
-  "system": {
-    "platform": "linux (Docker)",
-    "arch": "arm64",
-    "cpuModel": "Apple Silicon (via Docker)",
-    "cpuCores": 10,
-    "totalMemoryGB": 32,
-    "gpuAvailable": true,
-    "gpuInfo": "Apple Silicon GPU (host)"
-  },
-  "stats": {
-    "totalFiles": 5,
-    "totalSizeMB": 25.5,
-    "embedAvgCharsPerSecond": 15000
-  },
-  "files": [
-    {
-      "fileHash": "7f3153875783d430",
-      "fileSizeMB": 3.1,
-      "pageCount": 6,
-      "rawTextChars": 9034,
-      "ocrOutputChars": 8375,
-      "textSimilarityPercent": 88.6,
-      "ocrDurationMs": 5370,
-      "embedDurationMs": 4620,
-      "chunkCount": 5
-    }
-  ]
+All operations are timed and logged:
+
+```typescript
+interface TimingMetrics {
+  operation: string;
+  model_id: string;
+  provider: string;        // CPU, CUDA
+  input_size: number;      // tokens or bytes
+  output_size: number;     // vectors or characters
+  latency_ms: number;
+  tokens_per_second?: number;
+  memory_mb?: number;
 }
 ```
 
-File names are replaced with SHA256 hashes for privacy when sharing benchmarks. See `client/benchmark-format.md` for the complete JSON schema.
+### Benchmark Report
 
-
-## Automated Testing
-
-### test-docker-stack.sh
-
-Comprehensive test script with automatic platform detection.
-
-```bash
-# Run default demo (auto-detects platform)
-./test-docker-stack.sh
-
-# Test with specific file
-TEST_FILE="path/to/file.pdf" TEST_QUERY="securities fraud" ./test-docker-stack.sh
-
-# Force GPU profile
-PROFILE_OVERRIDE=gpu ./test-docker-stack.sh
-
-# Custom command
-TEST_MODE=custom CUSTOM_COMMAND="search 'fraud'" ./test-docker-stack.sh
+```json
+{
+  "system": {
+    "platform": "linux",
+    "arch": "arm64",
+    "cpu": "Nvidia Grace",
+    "gpu": "Nvidia Blackwell",
+    "memory_gb": 128,
+    "provider": "CUDAExecutionProvider"
+  },
+  "models": {
+    "modernbert-embed": {
+      "load_time_ms": 1234,
+      "inference": {
+        "avg_latency_ms": 12.5,
+        "p50_latency_ms": 11.2,
+        "p95_latency_ms": 18.7,
+        "tokens_per_second": 4521
+      }
+    }
+  },
+  "comparison": {
+    "cpu_baseline_ms": 89.2,
+    "gpu_accelerated_ms": 12.5,
+    "speedup": "7.1x"
+  }
+}
 ```
-
-**Environment Variables:**
-
-| Variable | Description | Default |
-| --- | --- | --- |
-| `PROFILE_OVERRIDE` | Force Docker profile: `default`, `gpu`, or `cuda` | auto-detect |
-| `TEST_MODE` | Test mode: `demo`, `single`, or `custom` | `demo` |
-| `TEST_FILE` | File to test (for `single` mode) | - |
-| `TEST_QUERY` | Search query | `securities fraud` |
-| `CUSTOM_COMMAND` | Custom CLI command (for `custom` mode) | - |
-
-
-## Architecture
-
-### Services
-
-1. **inception-cpu** (Port 8005)
-   - Embedding service using ModernBERT
-   - Model: `freelawproject/modernbert-embed-base_finetune_512`
-   - Generates 768-dimensional vectors
-
-2. **inception-gpu** (Port 8005)
-   - GPU-accelerated version
-   - Requires NVIDIA CUDA 12.4+
-   - Much faster processing
-
-3. **doctor** (Port 5050)
-   - Document processing service
-   - 18 workers by default
-
-4. **client**
-   - Bun/TypeScript CLI
-   - Handles OCR, indexing, and search
-
-### Data Flow
-
-```
-PDF/Image --> Mistral OCR API --> Markdown
-                    |
-                    v
-         Inception Service --> Vector Embeddings
-                    |
-                    v
-              Local JSON Index
-                    |
-                    v
-         Semantic Search (Cosine Similarity)
-```
-
-
-## Docker Profiles
-
-```bash
-# CPU-based (default, M1/M2/M3 Mac compatible)
-docker compose up -d inception-cpu
-
-# GPU-accelerated (requires NVIDIA GPU)
-docker compose --profile gpu up -d inception-gpu
-
-# Full demo stack (Inception + Doctor + Client)
-docker compose --profile demo up -d
-
-# Individual services
-docker compose --profile doctor up -d doctor
-```
-
-
-## Development
-
-### Local Setup
-
-1. Start services:
-
-   ```bash
-   docker compose up -d inception-cpu
-   ```
-
-2. Install client dependencies:
-
-   ```bash
-   cd client
-   bun install
-   ```
-
-3. Set environment variables:
-
-   ```bash
-   export MISTRAL_OCR_API_KEY="your-key"
-   export INCEPTION_URL="http://localhost:8005"
-   ```
-
-4. Run commands:
-
-   ```bash
-   bun run src/index.ts demo
-   ```
-
-### Test Scripts
-
-Located in `tests/` directory:
-
-- `test-docker-stack.sh` - Full end-to-end test of Docker stack (also available at root)
-- `test-mistral-ocr.ts` - Test Mistral OCR API standalone
-
-```bash
-# Test full Docker stack (from root)
-./test-docker-stack.sh
-
-# Test Mistral OCR API only
-bun run tests/test-mistral-ocr.ts
-
-# Test with a specific file
-bun run tests/test-mistral-ocr.ts "client/files/sample.pdf"
-```
-
 
 ## Configuration
 
 ### Environment Variables
 
-Create a `.env` file in the project root (see `.env.example`):
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `PORT` | `8005` | Server port |
+| `EXECUTION_PROVIDER` | `auto` | `auto`, `cpu`, `cuda` |
+| `MODEL_REGISTRY` | `/models/registry.json` | Model config path |
+| `CONVERTER_URL` | `http://converter:8010` | Python converter service |
+| `MISTRAL_OCR_API_KEY` | - | Mistral API key for OCR |
+| `LOG_LEVEL` | `info` | `debug`, `info`, `warn`, `error` |
+| `ENABLE_METRICS` | `true` | Prometheus metrics |
+
+### Model Registry (registry.json)
+
+```json
+{
+  "version": "1.0",
+  "cache_dir": "/models",
+  "models": [
+    {
+      "id": "modernbert-embed",
+      "name": "freelawproject/modernbert-embed-base_finetune_512",
+      "type": "embedding",
+      "enabled": true,
+      "config": {
+        "max_tokens": 512,
+        "embedding_dim": 768,
+        "pooling": "mean",
+        "normalize": true,
+        "query_prefix": "search_query: ",
+        "document_prefix": "search_document: "
+      }
+    },
+    {
+      "id": "deepseek-ocr",
+      "name": "deepseek-ai/DeepSeek-OCR",
+      "type": "ocr",
+      "enabled": true
+    },
+    {
+      "id": "hunyuan-ocr",
+      "name": "tencent/HunyuanOCR",
+      "type": "ocr",
+      "enabled": true
+    }
+  ]
+}
+```
+
+## Docker Compose Profiles
+
+| Profile | Services | Use Case |
+|---------|----------|----------|
+| `cpu` | backend-cpu | Apple Silicon, generic ARM64 |
+| `gpu` | backend-gpu | DGX Spark, CUDA GPUs |
+| `demo` | backend + demo client | Full demo |
+| `convert` | converter | Model conversion only |
+| `llm-cpu` | llm-model-server-cpu | Python LLM server (CPU) |
+| `llm-gpu` | llm-model-server-gpu | Python LLM server (GPU) |
+
+## vLLM Hydra Cluster
+
+For production GPU deployments, the vLLM Hydra stack provides:
+
+- **Multi-model inference**: Embeddings, OCR, and GPT-OSS on shared GPU
+- **Load balancing**: Traefik distributes requests across replicas
+- **Multi-node**: Deploy across spark-1 and spark-2 for high availability
+
+**Quick start**:
 
 ```bash
-# Required
-MISTRAL_OCR_API_KEY=your-key-here
+cd vllm
 
-# Optional
-INCEPTION_URL=http://localhost:8005
-TRANSFORMER_MODEL_NAME=freelawproject/modernbert-embed-base_finetune_512
-MAX_BATCH_SIZE=32
-DOCTOR_WORKERS=18
+# Start all services
+make up-all
+
+# Check cluster health
+make health-all
+
+# Run 14-test verification suite
+make test
+
+# Run chain-of-thought demo
+make demo-cot
 ```
 
-### Inception Service
+**Service Ports**:
 
-Edit `docker-compose.yml` to change settings:
+| Service | spark-1 | spark-2 | Load Balanced |
+|---------|---------|---------|---------------|
+| Embeddings | 8001, 8002 | 8001, 8002 | 8000 |
+| OCR | 8003 | 8003 | 8010 |
+| Inference | 8004 | -- | 8020 |
 
-```yaml
-environment:
-  - TRANSFORMER_MODEL_NAME=your-model-name
-  - MAX_BATCH_SIZE=64
-```
+See [vllm/README.md](vllm/README.md) for comprehensive documentation.
 
+## Development
 
-## Performance
-
-### OCR Speed (Mistral API)
-
-| Document Size | Processing Time |
-| --- | --- |
-| Small PDFs (< 5 pages) | 5-10 seconds |
-| Medium PDFs (5-20 pages) | 15-30 seconds |
-| Large PDFs (20+ pages) | 30+ seconds |
-
-### Embedding Speed (Inception)
-
-| Hardware | Time per Chunk |
-| --- | --- |
-| CPU (Apple Silicon) | 1-2 seconds |
-| GPU (NVIDIA CUDA) | 0.1-0.5 seconds |
-
-### Search Speed
-
-- Instant for < 1,000 chunks
-- Less than 1 second for 10,000+ chunks
-
-
-## Costs
-
-### Mistral OCR
-
-- **Standard**: $2 per 1,000 pages
-- **Batch API**: $1 per 1,000 pages (50% discount)
-
-### Inception Service
-
-- **Self-hosted**: Free (requires CPU/GPU hardware)
-
-
-## Troubleshooting
-
-### Service Not Ready
+### Project Setup
 
 ```bash
-# Check services
-docker compose ps
+# Clone and checkout branch
+git clone <repo>
+git checkout feature/onnx-typescript-backend
 
-# View logs
-docker compose logs inception-cpu
-docker compose logs doctor
+# Install dependencies
+bun install
+cd demo && bun install
+cd ../converter && pip install -e .
 
-# Restart services
-docker compose restart
+# Run tests
+bun test
+
+# Type check
+bun run typecheck
 ```
 
-### OCR Failures
-
-**Error**: "Upload failed" or "Invalid file format"
-
-- Verify the file is a valid PDF or image
-- Check file size (max 50MB, 1000 pages)
-- Ensure the API key is set correctly
-
-### Embedding Errors
-
-**Error**: "Connection refused"
-
-- Ensure the Docker service is running
-- Check that port 8005 is available
-- Wait 1-2 minutes for model loading
-
-### No Search Results
-
-- Verify `embeddings.json` exists and is not empty
-- Re-index documents
-- Try different search queries
-
-
-## File Structure
-
-```
-inception-demo/
-├── client/                     # TypeScript/Bun CLI
-│   ├── files/                  # Document storage (PDFs renamed to SHA256 hashes)
-│   │   └── filename-mapping.json  # Original filename mapping
-│   ├── ocr/                    # OCR output (.ocr.md files)
-│   ├── logs/                   # Benchmark session JSON files
-│   ├── src/
-│   │   ├── index.ts            # CLI commands
-│   │   ├── api.ts              # OCR and embedding functions
-│   │   ├── pdf-utils.ts        # PDF text extraction and comparison
-│   │   ├── types.ts            # TypeScript type definitions
-│   │   ├── benchmark.ts        # Benchmark analyzer
-│   │   ├── benchmark-utils.ts  # Benchmark utilities and system detection
-│   │   └── rename-to-hash.ts   # Utility to rename files to SHA256 hashes
-│   ├── benchmark-format.md     # Benchmark JSON schema documentation
-│   └── embeddings.json         # Vector index (generated)
-├── inception/                  # Python embedding service
-├── doctor/                     # Document processing service
-├── tests/                      # Test scripts
-│   ├── test-docker-stack.sh    # Full Docker stack test
-│   └── test-mistral-ocr.ts     # Mistral OCR API test
-├── .env                        # Environment variables (create from .env.example)
-├── .env.example                # Example environment configuration
-├── docker-compose.yml          # Service orchestration
-├── start-inception.sh          # Platform-aware startup script
-├── test-docker-stack.sh        # Automated testing (symlink to tests/)
-├── CHANGELOG.md                # Version history
-└── README.md                   # This file
-```
-
-
-## GPU Support
-
-> **Note**: GPU support is currently not working and will be addressed in a future update. Use the CPU version (`inception-cpu`) for now.
-
-### Requirements
-
-- NVIDIA GPU with CUDA 12.6+
-- NVIDIA Docker runtime
-- Linux host (GPU passthrough from Mac/Windows not supported)
-
-### Usage
+### Testing
 
 ```bash
-# Build GPU image
-docker compose --profile gpu build inception-gpu
+# Unit tests
+bun test
 
-# Run GPU service
-docker compose --profile gpu up -d inception-gpu
+# Integration tests (requires running server)
+bun test:integration
 
-# Test with GPU
-PROFILE_OVERRIDE=gpu ./test-docker-stack.sh
+# Benchmark tests
+bun test:benchmark
 ```
-
-### Verify GPU Access
-
-```bash
-docker compose exec inception-gpu nvidia-smi
-```
-
-
-## CI/CD Integration
-
-The `test-docker-stack.sh` script is designed for CI/CD:
-
-```yaml
-# Example GitHub Actions
-- name: Run Inception Demo Tests
-  env:
-    MISTRAL_OCR_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
-  run: |
-    echo "MISTRAL_OCR_API_KEY=$MISTRAL_OCR_API_KEY" > .env
-    ./test-docker-stack.sh
-```
-
 
 ## Resources
 
-- **Mistral OCR**: [https://docs.mistral.ai/capabilities/document_ai/basic_ocr](https://docs.mistral.ai/capabilities/document_ai/basic_ocr)
-- **Inception Service**: [https://github.com/freelawproject/inception](https://github.com/freelawproject/inception)
-- **ModernBERT Model**: [https://huggingface.co/freelawproject/modernbert-embed-base_finetune_512](https://huggingface.co/freelawproject/modernbert-embed-base_finetune_512)
-- **Free Law Project**: [https://free.law/2025/03/11/semantic-search/](https://free.law/2025/03/11/semantic-search/)
-
+- [ONNX Runtime](https://onnxruntime.ai/)
+- [Transformers.js](https://huggingface.co/docs/transformers.js)
+- [Hono](https://hono.dev/)
+- [Free Law Project Inception](https://github.com/freelawproject/inception)
+- [ModernBERT Model](https://huggingface.co/freelawproject/modernbert-embed-base_finetune_512)
 
 ## License
 
-See individual component licenses:
-
-- Inception: Check [inception/LICENSE](inception/LICENSE)
-- Doctor: Check [doctor/LICENSE](doctor/LICENSE)
-- Client: MIT License
-
-
-## Contributing
-
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Test with `./test-docker-stack.sh`
-5. Submit a pull request
-
-
-## Support
-
-For issues and questions:
-
-- Mistral API: [https://docs.mistral.ai](https://docs.mistral.ai)
-- Inception: [https://github.com/freelawproject/inception/issues](https://github.com/freelawproject/inception/issues)
-- This Demo: Open an issue in this repository
+MIT
