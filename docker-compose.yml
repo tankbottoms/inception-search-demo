@@ -113,21 +113,70 @@ services:
     networks:
       - default
 
-  # Legacy Python backend (for comparison)
-  inception-legacy:
-    container_name: inception-legacy
+  # LLM Model Server - CPU (Apple Silicon, ARM64, x86_64)
+  llm-model-server-cpu:
+    container_name: llm-model-server-cpu
     build:
-      context: ./backup/inception
-      args:
-        TARGET_ENV: dev
-        BASE_IMAGE: ubuntu:24.04
-        UV_SYNC_FLAGS: "-v"
-    profiles: ["legacy", "python"]
+      context: ./llm-model-server
+      dockerfile: Dockerfile.cpu
+    profiles: ["llm-cpu", "python-cpu"]
     environment:
-      - TRANSFORMER_MODEL_NAME=freelawproject/modernbert-embed-base_finetune_512
-      - MAX_BATCH_SIZE=32
+      - PORT=8006
+      - EXECUTION_PROVIDER=cpu
+      - MODEL_CACHE_DIR=/models
+      - LOG_LEVEL=info
+    env_file:
+      - .env
+    volumes:
+      - ./models:/models
     ports:
-      - "8006:8005"
+      - "8006:8006"
+    networks:
+      default:
+        aliases:
+          - llm-model-server
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8006/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 90s
+
+  # LLM Model Server - GPU (DGX Spark, NVIDIA CUDA)
+  llm-model-server-gpu:
+    container_name: llm-model-server-gpu
+    build:
+      context: ./llm-model-server
+      dockerfile: Dockerfile.gpu
+    profiles: ["llm-gpu", "python-gpu", "spark-python"]
+    environment:
+      - PORT=8006
+      - EXECUTION_PROVIDER=cuda
+      - MODEL_CACHE_DIR=/models
+      - LOG_LEVEL=info
+    env_file:
+      - .env
+    volumes:
+      - ./models:/models
+    ports:
+      - "8006:8006"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    networks:
+      default:
+        aliases:
+          - llm-model-server
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8006/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 90s
 
 networks:
   default:

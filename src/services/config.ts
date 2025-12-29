@@ -1,6 +1,5 @@
 /**
  * Configuration management for Inception ONNX service
- * Mirrors Python config from backup/inception/inception/config.py
  */
 
 import type { Settings, ExecutionProvider } from '../types';

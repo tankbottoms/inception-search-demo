@@ -1,6 +1,5 @@
 /**
  * Type definitions for Inception ONNX inference service
- * Mirrors the Python schemas from backup/inception/inception/schemas.py
  */
 
 // ============================================================

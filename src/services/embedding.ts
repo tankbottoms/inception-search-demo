@@ -1,6 +1,5 @@
 /**
  * Embedding Service - ONNX inference with mean pooling and normalization
- * Mirrors Python EmbeddingService from backup/inception/inception/embedding_service.py
  */
 
 import * as ort from 'onnxruntime-node';

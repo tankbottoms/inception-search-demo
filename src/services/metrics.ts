@@ -1,6 +1,5 @@
 /**
  * Prometheus metrics for Inception ONNX service
- * Mirrors Python metrics from backup/inception/inception/metrics.py
  */
 
 import { Counter, Histogram, Gauge, Registry, collectDefaultMetrics } from 'prom-client';

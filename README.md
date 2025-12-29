@@ -27,12 +27,6 @@ This branch refactors the inception-demo from Python/PyTorch to a unified TypeSc
 
 ```
 /
-├── backup/                     # Original files (delete after testing)
-│   ├── client/
-│   ├── inception/
-│   ├── doctor/
-│   └── tests/
-│
 ├── src/                        # TypeScript/Bun inference backend
 │   ├── index.ts                # Hono server entry
 │   ├── config.ts               # Settings (ENV + JSON)
@@ -334,7 +328,8 @@ interface TimingMetrics {
 | `gpu` | backend-gpu | DGX Spark, CUDA GPUs |
 | `demo` | backend + demo client | Full demo |
 | `convert` | converter | Model conversion only |
-| `legacy` | inception-cpu (Python) | Comparison/fallback |
+| `llm-cpu` | llm-model-server-cpu | Python LLM server (CPU) |
+| `llm-gpu` | llm-model-server-gpu | Python LLM server (GPU) |
 
 ## vLLM Distributed Inference
 
@@ -386,77 +381,6 @@ bun test:integration
 # Benchmark tests
 bun test:benchmark
 ```
-
-## Implementation Status
-
-### Phase 1: Branch Setup
-
-- [x] Create feature branch
-- [x] Move existing files to backup/
-- [x] Create directory structure
-- [x] Initialize package.json, tsconfig.json
-
-### Phase 2: Core Backend
-
-- [ ] Hono server setup
-- [ ] Provider detection (CPU/CUDA)
-- [ ] Model registry loader
-- [ ] HuggingFace API client
-
-### Phase 3: Python Converter
-
-- [ ] Dockerfile
-- [ ] CLI conversion tool
-- [ ] HTTP API for on-demand conversion
-
-### Phase 4: Inference Services
-
-- [ ] Tokenization (Transformers.js)
-- [ ] ONNX model loading
-- [ ] Mean pooling + normalization
-- [ ] Text chunking
-
-### Phase 5: OCR Integration
-
-- [ ] Mistral OCR API
-- [ ] DeepSeek-OCR local inference
-- [ ] HunyuanOCR local inference
-
-### Phase 6: Demo Client
-
-- [ ] PDF processing pipeline
-- [ ] OCR -> Embedding workflow
-- [ ] Search with similarity
-- [ ] Benchmark reporting
-
-### Phase 7: Docker & Scripts
-
-- [ ] Dockerfile (CPU)
-- [ ] Dockerfile.cuda (GPU)
-- [ ] docker-compose.yml
-- [ ] startup.sh scripts
-
-### Phase 8: vLLM Alternative
-
-- [ ] spark-1 docker-compose
-- [ ] spark-2 docker-compose
-- [ ] Cluster management scripts
-
-### Phase 9: Benchmarking
-
-- [ ] CPU vs GPU comparison
-- [ ] vLLM distributed benchmarks
-- [ ] Generate comparison reports
-
-## Migration Notes
-
-The `backup/` folder contains the original Python implementation:
-
-- `backup/inception/` - Original FastAPI embedding service
-- `backup/client/` - Original TypeScript demo client
-- `backup/doctor/` - Django document processing
-
-These will be deleted after the new implementation is validated. The legacy Python backend remains available via `--profile legacy` for comparison.
 
 ## Resources
 

@@ -19,9 +19,13 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 
-- Moved original Python/FastAPI implementation to `backup/` folder
 - Restructured project for TypeScript-first development
 - New directory structure with `src/`, `demo/`, `converter/`, `vllm/`
+
+### Removed
+
+- Legacy Python/FastAPI implementation (`backup/` folder)
+- Docker Compose legacy profile (was using backup/inception)
 
 ### Technical Details
 

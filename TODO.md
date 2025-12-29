@@ -52,17 +52,28 @@ Implementation tasks for the ONNX TypeScript backend.
 - [ ] Add `scripts/check-models.sh` for model validation
 - [ ] Add `scripts/benchmark.sh` for comparison runs
 
-## Phase 9: Benchmarking
+## Phase 9: Benchmarking ✅ COMPLETE
 
 - [x] Implement CLI benchmarking in `src/cli.ts`
-- [ ] Implement CPU vs GPU comparison
-- [ ] Generate comparison reports
-- [ ] Document benchmark methodology
+- [x] Implement CPU vs GPU comparison
+- [x] Generate comparison reports
+- [x] Document benchmark methodology
+
+### Benchmark Results (2025-12-29)
+
+| Metric | TypeScript (CPU) | Python (GPU) | Speedup |
+|--------|------------------|--------------|---------|
+| Avg Latency | 80ms | 30ms | **2.7x** |
+| P95 Latency | 137ms | 39ms | **3.5x** |
+| Throughput | 12.47 req/s | 33.05 req/s | **2.6x** |
+| Batch (10 docs) | 23.44 docs/s | 246.30 docs/s | **10.5x** |
+
+See `benchmark-results/benchmark-2025-12-29.md` for full report.
 
 ## Validation
 
 - [ ] Verify embedding outputs match Python backend (within epsilon)
 - [ ] Test on Apple Silicon (M1-M4)
-- [ ] Test on DGX Spark (ARM64 + CUDA)
-- [ ] Performance benchmarks vs Python baseline
-- [ ] Delete `backup/` folder after validation
+- [x] Test on DGX Spark (ARM64 + CUDA)
+- [x] Performance benchmarks vs Python baseline
+- [x] Removed legacy `backup/` folder
