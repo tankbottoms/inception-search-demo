@@ -1,27 +1,39 @@
-# Inception ONNX - TypeScript/Bun Inference Backend
+# Inception Search Demo
 
-> Multi-platform ONNX inference service with ARM64 CPU and CUDA GPU acceleration
+> Multi-platform document processing with OCR, embeddings, and semantic search
 
 ## Overview
 
-This branch refactors the inception-demo from Python/PyTorch to a unified TypeScript/Bun stack using ONNX Runtime. The goal is a single codebase that auto-detects hardware and leverages GPU acceleration when available.
+A comprehensive document processing pipeline featuring:
+
+- **OCR**: Extract text from PDFs using HunyuanOCR (GPU) or Tesseract (CPU)
+- **Embeddings**: Generate semantic embeddings using ModernBERT
+- **Inference**: Chain-of-thought reasoning with GPT-OSS 20B
+- **Search**: Cosine similarity semantic search
+
+Two deployment options are available:
+
+| Option | Use Case | Stack | Documentation |
+|--------|----------|-------|---------------|
+| **vLLM Hydra** | Production GPU inference | vLLM + Docker | [vllm/README.md](vllm/README.md) |
+| **ONNX Backend** | Development / CPU | TypeScript + ONNX | This file |
 
 **Target Platforms**:
 
 | Platform | Provider | Notes |
 |----------|----------|-------|
+| NVIDIA DGX Spark | vLLM + CUDA | Production recommended (ARM64 + GB200) |
 | Apple Silicon (M1-M5) | CPUExecutionProvider | ARM64 CPU inference |
-| Nvidia DGX Spark | CUDAExecutionProvider | ARM64 + CUDA acceleration |
 | Generic ARM64/x64 | CPUExecutionProvider | Fallback CPU |
 
-## Approved Models
+## Models
 
-| Model | Type | Status |
-|-------|------|--------|
-| `freelawproject/modernbert-embed-base_finetune_512` | Embedding | Primary |
-| `deepseek-ai/DeepSeek-OCR` | OCR | Enabled |
-| `tencent/HunyuanOCR` | OCR | Enabled |
-| `gpt-oss:20b` | General Inference | Planned |
+| Model | Type | Status | Provider |
+|-------|------|--------|----------|
+| `freelawproject/modernbert-embed-base_finetune_512` | Embedding | Active | vLLM |
+| `tencent/HunyuanOCR` | OCR | Active | vLLM |
+| `openai/gpt-oss-20b` | Inference | Active | vLLM |
+| Tesseract | OCR | Active | CPU fallback |
 
 ## Directory Structure
 
@@ -38,68 +50,62 @@ This branch refactors the inception-demo from Python/PyTorch to a unified TypeSc
 │   ├── services/
 │   │   ├── model-registry.ts   # Model resolution logic
 │   │   ├── model-loader.ts     # ONNX session management
-│   │   ├── huggingface.ts      # HF API client
-│   │   ├── tokenizer.ts        # Transformers.js tokenization
 │   │   ├── embedding.ts        # Embedding generation
-│   │   ├── pooling.ts          # Mean pooling + L2 norm
-│   │   ├── chunking.ts         # Text chunking
 │   │   └── ocr/
+│   │       ├── index.ts        # OCR router
 │   │       ├── mistral.ts      # Mistral OCR API
-│   │       ├── deepseek.ts     # DeepSeek-OCR local
-│   │       └── hunyuan.ts      # HunyuanOCR local
-│   ├── providers/
-│   │   └── provider-factory.ts # CPU/CUDA detection
+│   │       ├── tesseract.ts    # Tesseract CPU fallback
+│   │       └── pdf-utils.ts    # PDF processing utilities
 │   └── instrumentation/
 │       ├── metrics.ts          # Prometheus metrics
-│       ├── timing.ts           # Operation timing
 │       └── logger.ts           # Structured logging
 │
-├── converter/                  # Python ONNX conversion (fallback)
-│   ├── Dockerfile
-│   ├── pyproject.toml
-│   ├── convert.py              # CLI conversion
-│   └── server.py               # HTTP conversion API
+├── vllm/                       # vLLM Hydra (production GPU stack)
+│   ├── README.md               # Comprehensive vLLM documentation
+│   ├── Makefile                # All operations via make commands
+│   ├── docker-compose.yml      # Main stack (spark-1)
+│   ├── docker-compose.spark2.yml  # Multi-node (spark-2)
+│   ├── traefik/                # Load balancer configuration
+│   │   ├── traefik.yml
+│   │   └── dynamic.yml
+│   ├── client/                 # TypeScript demo client
+│   │   ├── src/
+│   │   │   ├── index.ts        # CLI commands
+│   │   │   ├── cot-demo.ts     # Chain-of-thought demo
+│   │   │   ├── verify-demo.ts  # Verification suite
+│   │   │   ├── stress-test.ts  # Load testing
+│   │   │   └── ocr-pipeline.ts # OCR pipeline
+│   │   └── package.json
+│   ├── scripts/
+│   │   ├── hydra-start.sh      # Smart startup
+│   │   ├── sync-spark2.sh      # Multi-node sync
+│   │   └── verify-services.sh  # Health monitoring
+│   ├── CHANGELOG.md
+│   └── TODO.md
+│
+├── llm-model-server/           # Python embedding server
+│   ├── Dockerfile.cpu
+│   ├── Dockerfile.gpu
+│   └── src/
+│       └── main.py             # FastAPI server
 │
 ├── demo/                       # Demo client
-│   ├── src/
-│   │   ├── index.ts            # CLI commands
-│   │   ├── api.ts              # Backend API client
-│   │   ├── benchmark.ts        # Benchmark analyzer
-│   │   └── types.ts
-│   ├── files/                  # Sample PDFs (existing)
+│   ├── files/                  # Sample PDFs
 │   ├── output/                 # Generated outputs
-│   │   ├── *.ocr.md            # OCR markdown
-│   │   └── *.bert.json         # Embeddings
-│   ├── logs/                   # Benchmark sessions
-│   └── package.json
+│   └── logs/                   # Benchmark sessions
 │
-├── models/                     # ONNX model cache (mounted volume)
-│   └── registry.json           # Model definitions
-│
-├── vllm/                       # vLLM distributed inference (alternative)
-│   ├── README.md
-│   ├── docker-compose.spark-1.yml
-│   ├── docker-compose.spark-2.yml
-│   └── scripts/
-│       ├── start-cluster.sh
-│       ├── stop-cluster.sh
-│       └── monitor.sh
-│
-├── test/                       # Tests
-│   ├── embedding.test.ts
-│   ├── ocr.test.ts
-│   └── benchmark.test.ts
+├── models/                     # Model cache (mounted volume)
 │
 ├── scripts/
-│   ├── startup.sh              # Main entry
-│   ├── check-models.sh         # Model validation
-│   └── benchmark.sh            # CPU vs GPU comparison
+│   ├── startup.sh              # Main entry (auto-detect platform)
+│   ├── detect-platform.sh      # Platform detection
+│   ├── benchmark-cpu-gpu.sh    # CPU vs GPU comparison
+│   └── verify-pipeline.sh      # Pipeline verification
 │
 ├── Dockerfile                  # CPU build
-├── Dockerfile.cuda             # GPU build
-├── docker-compose.yml
+├── docker-compose.yml          # ONNX backend services
+├── Makefile                    # Simplified commands
 ├── package.json
-├── tsconfig.json
 ├── README.md                   # This file
 ├── CHANGELOG.md
 └── TODO.md
@@ -107,45 +113,58 @@ This branch refactors the inception-demo from Python/PyTorch to a unified TypeSc
 
 ## Quick Start
 
-### Prerequisites
+### Option 1: vLLM Hydra (Production GPU - Recommended)
 
-- Bun >= 1.0
-- Docker & Docker Compose
-- (Optional) NVIDIA GPU with CUDA 12.x for GPU acceleration
-
-### Run with Docker
+For NVIDIA DGX Spark or other CUDA GPUs:
 
 ```bash
-# Auto-detect platform (CPU or GPU)
-./scripts/startup.sh
+cd vllm
 
-# Explicit CPU mode
-./scripts/startup.sh --profile cpu
+# Start all services (embeddings + OCR + inference + load balancer)
+make up-all
 
-# GPU mode (DGX Spark)
-./scripts/startup.sh --profile gpu
+# Check service health
+make health
 
-# Check/download models only
-./scripts/startup.sh --check
+# Run verification tests (14 tests)
+make test
 
-# Run benchmarks
-./scripts/startup.sh --benchmark
+# Run chain-of-thought demo
+make demo-cot-quick
+
+# Stop all services
+make down
 ```
 
-### Run Locally (Development)
+See [vllm/README.md](vllm/README.md) for comprehensive documentation.
+
+### Option 2: ONNX Backend (Development / CPU)
+
+For local development or CPU-only environments:
 
 ```bash
+# Prerequisites: Bun >= 1.0, Docker
+
 # Install dependencies
 bun install
-
-# Check models
-bun run cli --check
 
 # Start server
 bun run dev
 
 # Run demo
 cd demo && bun run demo
+```
+
+### Platform Detection
+
+The system auto-detects your platform:
+
+```bash
+# Show platform info
+./scripts/detect-platform.sh all
+
+# Or via make
+make status
 ```
 
 ## Model Resolution Flow
@@ -173,52 +192,59 @@ The demo client processes PDFs and generates:
 
 ## API Endpoints
 
-### Embedding
+### vLLM Hydra (OpenAI-compatible)
+
+All services expose OpenAI-compatible APIs:
 
 ```bash
-# Query embedding (fast, single vector)
+# Embeddings (port 8001, or 8000 for load balanced)
+curl http://localhost:8001/v1/embeddings \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "freelawproject/modernbert-embed-base_finetune_512",
+    "input": "Your text to embed"
+  }'
+
+# OCR via HunyuanOCR (port 8003, or 8010 for load balanced)
+curl http://localhost:8003/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "tencent/HunyuanOCR",
+    "messages": [{
+      "role": "user",
+      "content": [
+        {"type": "text", "text": "Extract all text from this image"},
+        {"type": "image_url", "image_url": {"url": "data:image/png;base64,..."}}
+      ]
+    }],
+    "max_tokens": 4096
+  }'
+
+# Inference via GPT-OSS (port 8004, or 8020 for load balanced)
+curl http://localhost:8004/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "openai/gpt-oss-20b",
+    "messages": [{"role": "user", "content": "What is 15 + 28?"}],
+    "max_tokens": 512
+  }'
+
+# Health check (all services)
+curl http://localhost:8001/health
+curl http://localhost:8003/health
+curl http://localhost:8004/health
+```
+
+### ONNX Backend (Development)
+
+```bash
+# Embedding
 curl -X POST http://localhost:8005/api/v1/embed/query \
   -H "Content-Type: application/json" \
   -d '{"text": "search query here"}'
 
-# Document embedding (chunked, multiple vectors)
-curl -X POST http://localhost:8005/api/v1/embed/text \
-  -H "Content-Type: text/plain" \
-  -d "Full document text here..."
-
-# Batch embedding
-curl -X POST http://localhost:8005/api/v1/embed/batch \
-  -H "Content-Type: application/json" \
-  -d '{"documents": [{"id": 1, "text": "..."}]}'
-```
-
-### OCR
-
-```bash
-# OCR with Mistral (default)
-curl -X POST http://localhost:8005/api/v1/ocr \
-  -F "file=@document.pdf" \
-  -F "provider=mistral"
-
-# OCR with DeepSeek
-curl -X POST http://localhost:8005/api/v1/ocr \
-  -F "file=@document.pdf" \
-  -F "provider=deepseek"
-
-# OCR with HunyuanOCR
-curl -X POST http://localhost:8005/api/v1/ocr \
-  -F "file=@document.pdf" \
-  -F "provider=hunyuan"
-```
-
-### Health & Metrics
-
-```bash
 # Health check
 curl http://localhost:8005/health
-
-# Prometheus metrics
-curl http://localhost:8005/metrics
 ```
 
 ## Instrumentation
@@ -331,22 +357,41 @@ interface TimingMetrics {
 | `llm-cpu` | llm-model-server-cpu | Python LLM server (CPU) |
 | `llm-gpu` | llm-model-server-gpu | Python LLM server (GPU) |
 
-## vLLM Distributed Inference
+## vLLM Hydra Cluster
 
-For production deployments on dual DGX Spark nodes, see `vllm/README.md`.
+For production GPU deployments, the vLLM Hydra stack provides:
+
+- **Multi-model inference**: Embeddings, OCR, and GPT-OSS on shared GPU
+- **Load balancing**: Traefik distributes requests across replicas
+- **Multi-node**: Deploy across spark-1 and spark-2 for high availability
 
 **Quick start**:
 
 ```bash
-# Start Ray cluster on spark-1 and spark-2
-cd vllm && ./scripts/start-cluster.sh
+cd vllm
 
-# Serve model distributed across both nodes
-./scripts/start-cluster.sh --model tencent/HunyuanOCR
+# Start all services
+make up-all
 
-# Monitor cluster
-./scripts/monitor.sh
+# Check cluster health
+make health-all
+
+# Run 14-test verification suite
+make test
+
+# Run chain-of-thought demo
+make demo-cot
 ```
+
+**Service Ports**:
+
+| Service | spark-1 | spark-2 | Load Balanced |
+|---------|---------|---------|---------------|
+| Embeddings | 8001, 8002 | 8001, 8002 | 8000 |
+| OCR | 8003 | 8003 | 8010 |
+| Inference | 8004 | -- | 8020 |
+
+See [vllm/README.md](vllm/README.md) for comprehensive documentation.
 
 ## Development
 

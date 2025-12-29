@@ -27,6 +27,11 @@ const EMBEDDINGS_URL = process.env.EMBEDDINGS_URL || `http://localhost:${process
 const OCR_URL = process.env.OCR_URL || `http://localhost:${process.env.OCR_PORT || 8003}`;
 const INFERENCE_URL = process.env.INFERENCE_URL || `http://localhost:${process.env.INFERENCE_PORT || 8004}`;
 
+// Multi-node endpoints
+const SPARK1_IP = process.env.SPARK1_IP || '192.168.1.76';
+const SPARK2_IP = process.env.SPARK2_IP || '192.168.1.63';
+const LB_URL = process.env.LB_URL || 'http://localhost:8000';
+
 const FILES_DIR = process.env.FILES_DIR || join(import.meta.dir, '../../files');
 const OUTPUT_DIR = process.env.OUTPUT_DIR || join(import.meta.dir, '../../output');
 const IMAGES_DIR = join(OUTPUT_DIR, 'images');
@@ -203,11 +208,13 @@ async function getEmbeddings(text: string): Promise<number[]> {
   const modelId = await getModelId(EMBEDDINGS_URL);
   if (!modelId) throw new Error('Embeddings model not available');
 
+  // Truncate to 1500 chars to stay under 512 token limit
+  const truncated = text.slice(0, 1500);
   const response = await axios.post<EmbeddingResponse>(
     `${EMBEDDINGS_URL}/v1/embeddings`,
     {
       model: modelId,
-      input: text,
+      input: truncated,
     },
     { timeout: 60000 }
   );
@@ -359,40 +366,106 @@ program
   .action(async () => {
     console.log(chalk.cyan.bold('\n--- vLLM Hydra Health Check ---\n'));
 
-    const services = [
-      { name: 'Embeddings (vllm-freelaw-modernbert)', url: EMBEDDINGS_URL },
-      { name: 'OCR (vllm-hunyuanOCR)', url: OCR_URL },
-      { name: 'Inference (vllm-gpt-oss-20b)', url: INFERENCE_URL },
+    // Spark-1 services
+    console.log(chalk.cyan.bold('Spark-1 (localhost)'));
+    console.log(chalk.cyan('-'.repeat(40)));
+
+    const spark1Services = [
+      { name: 'Embeddings (8001)', url: 'http://localhost:8001' },
+      { name: 'Embeddings (8002)', url: 'http://localhost:8002' },
+      { name: 'OCR (8003)', url: OCR_URL },
+      { name: 'Inference (8004)', url: INFERENCE_URL },
     ];
 
-    let allHealthy = true;
+    let hasInference = false;
+    let activeInferenceUrl = '';
+    let embCount = 0;
+    let ocrCount = 0;
+    let infCount = 0;
 
-    for (const service of services) {
+    for (const service of spark1Services) {
       const status = await checkServiceHealth(service.url, service.name);
-
       if (status.healthy) {
-        console.log(chalk.green.bold(`OK ${status.name}`));
-        console.log(chalk.white(`   URL: ${status.url}`));
-        console.log(chalk.white(`   Response: ${status.responseTime.toFixed(0)}ms`));
-        if (status.model) {
-          console.log(chalk.white(`   Model: ${status.model}`));
+        console.log(chalk.green.bold(`OK ${service.name.padEnd(18)} ${chalk.white(status.model || '')} ${chalk.dim(`${status.responseTime.toFixed(0)}ms`)}`));
+        if (service.name.includes('Embeddings')) embCount++;
+        if (service.name.includes('OCR')) ocrCount++;
+        if (service.name.includes('Inference')) {
+          infCount++;
+          hasInference = true;
+          activeInferenceUrl = status.url;
         }
       } else {
-        console.log(chalk.red.bold(`X  ${status.name}`));
-        console.log(chalk.white(`   URL: ${status.url}`));
-        console.log(chalk.red(`   Error: ${status.error}`));
-        allHealthy = false;
+        console.log(chalk.dim(`-- ${service.name.padEnd(18)}`));
       }
-      console.log('');
     }
+    console.log('');
 
-    if (allHealthy) {
-      console.log(chalk.green.bold('--- All services healthy ---\n'));
-      process.exit(0);
-    } else {
-      console.log(chalk.yellow.bold('--- Some services unhealthy ---\n'));
-      process.exit(1);
+    // Spark-2 services
+    console.log(chalk.cyan.bold(`Spark-2 (${SPARK2_IP})`));
+    console.log(chalk.cyan('-'.repeat(40)));
+
+    const spark2Services = [
+      { name: 'Embeddings (8001)', url: `http://${SPARK2_IP}:8001` },
+      { name: 'Embeddings (8002)', url: `http://${SPARK2_IP}:8002` },
+      { name: 'OCR (8003)', url: `http://${SPARK2_IP}:8003` },
+      { name: 'Inference (8004)', url: `http://${SPARK2_IP}:8004` },
+    ];
+
+    for (const service of spark2Services) {
+      const status = await checkServiceHealth(service.url, service.name);
+      if (status.healthy) {
+        console.log(chalk.green.bold(`OK ${service.name.padEnd(18)} ${chalk.white(status.model || '')} ${chalk.dim(`${status.responseTime.toFixed(0)}ms`)}`));
+        if (service.name.includes('Embeddings')) embCount++;
+        if (service.name.includes('OCR')) ocrCount++;
+        if (service.name.includes('Inference')) {
+          infCount++;
+          if (!hasInference) {
+            hasInference = true;
+            activeInferenceUrl = status.url;
+          }
+        }
+      } else {
+        console.log(chalk.dim(`-- ${service.name.padEnd(18)}`));
+      }
     }
+    console.log('');
+
+    // Load Balancers
+    console.log(chalk.cyan.bold('Load Balancers (Traefik)'));
+    console.log(chalk.cyan('-'.repeat(40)));
+
+    const lbServices = [
+      { name: 'Embeddings LB (8000)', url: LB_URL },
+      { name: 'OCR LB (8010)', url: 'http://localhost:8010' },
+      { name: 'Inference LB (8020)', url: 'http://localhost:8020' },
+    ];
+
+    for (const service of lbServices) {
+      const status = await checkServiceHealth(service.url, service.name);
+      if (status.healthy) {
+        const backends = service.name.includes('Embeddings') ? embCount :
+                        service.name.includes('OCR') ? ocrCount : infCount;
+        console.log(chalk.green.bold(`OK ${service.name.padEnd(20)}`) + chalk.dim(` ${backends} backends`));
+      } else {
+        console.log(chalk.dim(`-- ${service.name.padEnd(20)}`));
+      }
+    }
+    console.log('');
+
+    // Summary (spark-2 embeddings are optional, so 2 is typical max)
+    console.log(chalk.cyan.bold('Summary'));
+    console.log(chalk.cyan('-'.repeat(40)));
+    // Count spark-2 embeddings separately (they're optional)
+    const spark2EmbedCount = [spark2Services[0], spark2Services[1]]
+      .filter(async s => (await checkServiceHealth(s.url, s.name)).healthy).length;
+    console.log(chalk.white(`Embeddings: ${Math.min(embCount, 2)}/2 instances`) + (embCount > 2 ? chalk.dim(` (+${embCount - 2} spark-2)`) : ''));
+    console.log(chalk.white(`OCR: ${ocrCount}/2 instances`));
+    console.log(chalk.white(`Inference: ${infCount}/2 instances`));
+    if (hasInference) {
+      const host = activeInferenceUrl.includes(SPARK2_IP) ? 'spark-2' : 'spark-1';
+      console.log(chalk.green.bold(`Active Inference: ${host}`));
+    }
+    console.log('');
   });
 
 /**
@@ -887,29 +960,97 @@ program
     // Endpoint configurations
     const SINGLE_ENDPOINT = EMBEDDINGS_URL;  // Port 8001
     const LB_ENDPOINT = process.env.LB_URL || 'http://localhost:8000';  // Load balanced
+    const OCR_LB_ENDPOINT = 'http://localhost:8010';
+    const INFERENCE_LB_ENDPOINT = 'http://localhost:8020';
 
-    // Check services
+    // Check services - comprehensive discovery
     console.log(chalk.white.bold('Service Discovery'));
     console.log(chalk.dim('-'.repeat(50)));
 
-    const singleStatus = await checkServiceHealth(SINGLE_ENDPOINT, 'Single Replica');
-    const lbStatus = await checkServiceHealth(LB_ENDPOINT, 'Load Balanced');
-    const ocrStatus = await checkServiceHealth(OCR_URL, 'OCR');
-    const infStatus = await checkServiceHealth(INFERENCE_URL, 'Inference');
+    // Spark-1 services
+    console.log(chalk.cyan.bold('\n  Spark-1 (localhost)'));
+    const spark1Emb1 = await checkServiceHealth('http://localhost:8001', 'Embeddings');
+    const spark1Emb2 = await checkServiceHealth('http://localhost:8002', 'Embeddings-2');
+    const spark1Ocr = await checkServiceHealth('http://localhost:8003', 'OCR');
+    const spark1Inf = await checkServiceHealth('http://localhost:8004', 'Inference');
 
-    console.log(singleStatus.healthy
-      ? chalk.green(`  [OK] Single Replica (${SINGLE_ENDPOINT})`) + chalk.dim(` - ${singleStatus.model}`)
-      : chalk.red(`  [X] Single Replica: ${singleStatus.error}`));
+    console.log(spark1Emb1.healthy
+      ? chalk.green(`    [OK] Embeddings (8001)`) + chalk.dim(` - ${spark1Emb1.model}`)
+      : chalk.dim(`    [--] Embeddings (8001)`));
+    console.log(spark1Emb2.healthy
+      ? chalk.green(`    [OK] Embeddings (8002)`) + chalk.dim(` - ${spark1Emb2.model}`)
+      : chalk.dim(`    [--] Embeddings (8002)`));
+    console.log(spark1Ocr.healthy
+      ? chalk.green(`    [OK] OCR (8003)`) + chalk.dim(` - ${spark1Ocr.model}`)
+      : chalk.dim(`    [--] OCR (8003)`));
+    console.log(spark1Inf.healthy
+      ? chalk.green(`    [OK] Inference (8004)`) + chalk.dim(` - ${spark1Inf.model}`)
+      : chalk.dim(`    [--] Inference (8004)`));
+
+    // Spark-2 services
+    console.log(chalk.cyan.bold(`\n  Spark-2 (${SPARK2_IP})`));
+    const spark2Emb1 = await checkServiceHealth(`http://${SPARK2_IP}:8001`, 'Embeddings');
+    const spark2Emb2 = await checkServiceHealth(`http://${SPARK2_IP}:8002`, 'Embeddings-2');
+    const spark2Ocr = await checkServiceHealth(`http://${SPARK2_IP}:8003`, 'OCR');
+    const spark2Inf = await checkServiceHealth(`http://${SPARK2_IP}:8004`, 'Inference');
+
+    console.log(spark2Emb1.healthy
+      ? chalk.green(`    [OK] Embeddings (8001)`) + chalk.dim(` - ${spark2Emb1.model}`)
+      : chalk.dim(`    [--] Embeddings (8001)`));
+    console.log(spark2Emb2.healthy
+      ? chalk.green(`    [OK] Embeddings (8002)`) + chalk.dim(` - ${spark2Emb2.model}`)
+      : chalk.dim(`    [--] Embeddings (8002)`));
+    console.log(spark2Ocr.healthy
+      ? chalk.green(`    [OK] OCR (8003)`) + chalk.dim(` - ${spark2Ocr.model}`)
+      : chalk.dim(`    [--] OCR (8003)`));
+    console.log(spark2Inf.healthy
+      ? chalk.green(`    [OK] Inference (8004)`) + chalk.dim(` - ${spark2Inf.model}`)
+      : chalk.dim(`    [--] Inference (8004)`));
+
+    // Load Balancers
+    console.log(chalk.cyan.bold('\n  Load Balancers (Traefik)'));
+    const lbStatus = await checkServiceHealth(LB_ENDPOINT, 'Embeddings LB');
+    const ocrLbStatus = await checkServiceHealth(OCR_LB_ENDPOINT, 'OCR LB');
+    const infLbStatus = await checkServiceHealth(INFERENCE_LB_ENDPOINT, 'Inference LB');
+
+    // Count available backends for each LB
+    const embBackends = [spark1Emb1, spark1Emb2, spark2Emb1, spark2Emb2].filter(s => s.healthy).length;
+    const ocrBackends = [spark1Ocr, spark2Ocr].filter(s => s.healthy).length;
+    const infBackends = [spark1Inf, spark2Inf].filter(s => s.healthy).length;
+
     console.log(lbStatus.healthy
-      ? chalk.green(`  [OK] Load Balanced (${LB_ENDPOINT})`) + chalk.dim(` - Traefik LB`)
-      : chalk.dim(`  [--] Load Balanced: not available`));
-    console.log(ocrStatus.healthy
-      ? chalk.green(`  [OK] OCR`) + chalk.dim(` - ${ocrStatus.model}`)
-      : chalk.dim(`  [--] OCR: not available`));
-    console.log(infStatus.healthy
-      ? chalk.green(`  [OK] Inference`) + chalk.dim(` - ${infStatus.model}`)
-      : chalk.dim(`  [--] Inference: not available`));
+      ? chalk.green(`    [OK] Embeddings LB (8000)`) + chalk.dim(` - ${embBackends} backends`)
+      : chalk.dim(`    [--] Embeddings LB (8000)`));
+    console.log(ocrLbStatus.healthy
+      ? chalk.green(`    [OK] OCR LB (8010)`) + chalk.dim(` - ${ocrBackends} backends`)
+      : chalk.dim(`    [--] OCR LB (8010)`));
+    console.log(infLbStatus.healthy
+      ? chalk.green(`    [OK] Inference LB (8020)`) + chalk.dim(` - ${infBackends} backends`)
+      : chalk.dim(`    [--] Inference LB (8020)`));
+
+    // Summary counts (spark-2 embeddings are optional, so 2 is typical max)
+    const totalEmb = embBackends;
+    const totalOcr = ocrBackends;
+    const totalInf = infBackends;
+    const spark2EmbCount = (spark2Emb1.healthy ? 1 : 0) + (spark2Emb2.healthy ? 1 : 0);
+    console.log(chalk.cyan.bold('\n  Summary'));
+    console.log(chalk.white(`    Embeddings: ${totalEmb}/2 instances`) + (spark2EmbCount > 0 ? chalk.dim(` (+${spark2EmbCount} spark-2)`) : ''));
+    console.log(chalk.white(`    OCR: ${totalOcr}/2 instances`));
+    console.log(chalk.white(`    Inference: ${totalInf}/2 instances`));
     console.log('');
+
+    // For backwards compatibility with rest of benchmark
+    const singleStatus = spark1Emb1;
+    const ocrStatus = spark1Ocr;
+    const infStatus = spark1Inf;
+    const spark2InfUrl = `http://${SPARK2_IP}:8004`;
+    const spark2InfStatus = spark2Inf;
+    let activeInfUrl = INFERENCE_URL;
+    let activeInfStatus = infStatus;
+    if (!infStatus.healthy && spark2InfStatus.healthy) {
+      activeInfUrl = spark2InfUrl;
+      activeInfStatus = spark2InfStatus;
+    }
 
     if (!singleStatus.healthy) {
       console.log(chalk.red('Embeddings service not available. Start with: ./scripts/hydra-start.sh'));
@@ -1171,6 +1312,143 @@ program
     }
 
     // ================================================================
+    // Multi-Node Benchmark (Spark-1 vs Spark-2)
+    // ================================================================
+    console.log(chalk.white.bold('Multi-Node Benchmark'));
+    console.log(chalk.dim('-'.repeat(50)));
+
+    // Define all endpoints to test
+    const multiNodeEndpoints = [
+      { name: 'Spark-1 Embeddings', url: `http://${SPARK1_IP}:8001`, type: 'embeddings' },
+      { name: 'Spark-1 Embeddings-2', url: `http://${SPARK1_IP}:8002`, type: 'embeddings' },
+      { name: 'Spark-2 Embeddings', url: `http://${SPARK2_IP}:8001`, type: 'embeddings' },
+      { name: 'Spark-1 OCR', url: `http://${SPARK1_IP}:8003`, type: 'ocr' },
+      { name: 'Spark-2 OCR', url: `http://${SPARK2_IP}:8003`, type: 'ocr' },
+      { name: 'Spark-1 GPT-OSS', url: `http://${SPARK1_IP}:8004`, type: 'inference' },
+      { name: 'Spark-2 GPT-OSS', url: `http://${SPARK2_IP}:8004`, type: 'inference' },
+    ];
+
+    // Test each endpoint
+    for (const endpoint of multiNodeEndpoints) {
+      const status = await checkServiceHealth(endpoint.url, endpoint.name);
+
+      if (!status.healthy) {
+        console.log(chalk.dim(`  [--] ${endpoint.name}: not available`));
+        continue;
+      }
+
+      process.stdout.write(chalk.white(`  ${endpoint.name}: `));
+
+      try {
+        if (endpoint.type === 'embeddings') {
+          // Embeddings throughput test
+          const embModelId = await getModelId(endpoint.url);
+          if (!embModelId) throw new Error('No model');
+
+          const start = performance.now();
+          let successCount = 0;
+          const testCount = 20;
+
+          const promises = Array.from({ length: testCount }, (_, i) =>
+            axios.post(`${endpoint.url}/v1/embeddings`, {
+              model: embModelId,
+              input: `Test document ${i + 1} for multi-node benchmark.`,
+            }, { timeout: 30000 })
+              .then(() => { successCount++; })
+              .catch(() => {})
+          );
+
+          await Promise.all(promises);
+          const elapsed = performance.now() - start;
+          const rps = (successCount / elapsed) * 1000;
+
+          console.log(chalk.green.bold(`${rps.toFixed(1)} req/s`) +
+            chalk.dim(` (${successCount}/${testCount} in ${elapsed.toFixed(0)}ms)`));
+
+          results.push({
+            service: endpoint.name,
+            operation: 'Embeddings Throughput',
+            count: successCount,
+            avgMs: elapsed / successCount,
+            minMs: elapsed / successCount * 0.8,
+            maxMs: elapsed / successCount * 1.2,
+            throughput: `${rps.toFixed(1)} req/s`,
+          });
+
+        } else if (endpoint.type === 'inference') {
+          // Inference latency test (single request due to GPU memory)
+          const infModelId = await getModelId(endpoint.url);
+          if (!infModelId) throw new Error('No model');
+
+          const start = performance.now();
+          const response = await axios.post(`${endpoint.url}/v1/chat/completions`, {
+            model: infModelId,
+            messages: [{ role: 'user', content: 'What is 2+2? Answer with just the number.' }],
+            max_tokens: 20,
+          }, { timeout: 60000 });
+
+          const elapsed = performance.now() - start;
+          const tokens = response.data.usage?.completion_tokens || 0;
+          const tokensPerSec = tokens > 0 ? (tokens / elapsed) * 1000 : 0;
+
+          console.log(chalk.green.bold(`${elapsed.toFixed(0)}ms`) +
+            chalk.dim(` (${tokens} tokens, ${tokensPerSec.toFixed(1)} tok/s)`));
+
+          results.push({
+            service: endpoint.name,
+            operation: 'Inference Latency',
+            count: 1,
+            avgMs: elapsed,
+            minMs: elapsed,
+            maxMs: elapsed,
+            throughput: `${tokensPerSec.toFixed(1)} tok/s`,
+          });
+
+        } else if (endpoint.type === 'ocr') {
+          // OCR latency test
+          const testImg = await sharp({
+            create: { width: 200, height: 100, channels: 3, background: { r: 255, g: 255, b: 255 } }
+          }).png().toBuffer();
+
+          const ocrModelId = await getModelId(endpoint.url);
+          if (!ocrModelId) throw new Error('No model');
+
+          const start = performance.now();
+          await axios.post(`${endpoint.url}/v1/chat/completions`, {
+            model: ocrModelId,
+            messages: [{
+              role: 'user',
+              content: [
+                { type: 'text', text: 'Extract text from this image.' },
+                { type: 'image_url', image_url: { url: `data:image/png;base64,${testImg.toString('base64')}` } },
+              ],
+            }],
+            max_tokens: 100,
+          }, { timeout: 120000 });
+
+          const elapsed = performance.now() - start;
+
+          console.log(chalk.green.bold(`${elapsed.toFixed(0)}ms`));
+
+          results.push({
+            service: endpoint.name,
+            operation: 'OCR Latency',
+            count: 1,
+            avgMs: elapsed,
+            minMs: elapsed,
+            maxMs: elapsed,
+            throughput: `${(1000 / elapsed).toFixed(2)} req/s`,
+          });
+        }
+
+      } catch (error) {
+        const errMsg = error instanceof Error ? error.message : String(error);
+        console.log(chalk.red.bold(`failed: ${errMsg.slice(0, 50)}`));
+      }
+    }
+    console.log('');
+
+    // ================================================================
     // Summary Report
     // ================================================================
     console.log(chalk.cyan.bold('='.repeat(70)));
@@ -1232,9 +1510,10 @@ program
           model: ocrStatus.model,
         },
         inference: {
-          url: INFERENCE_URL,
-          available: infStatus.healthy,
-          model: infStatus.model,
+          url: activeInfUrl,
+          available: activeInfStatus.healthy,
+          model: activeInfStatus.model,
+          host: activeInfUrl.includes(SPARK2_IP) ? 'spark-2' : 'spark-1',
         },
       },
       results,

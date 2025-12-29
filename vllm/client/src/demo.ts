@@ -25,7 +25,13 @@ import sharp from 'sharp';
 // Service URLs
 const EMBEDDINGS_URL = process.env.EMBEDDINGS_URL || `http://localhost:${process.env.EMBEDDINGS_PORT || 8001}`;
 const OCR_URL = process.env.OCR_URL || `http://localhost:${process.env.OCR_PORT || 8003}`;
-const INFERENCE_URL = process.env.INFERENCE_URL || `http://localhost:${process.env.INFERENCE_PORT || 8004}`;
+
+// Inference endpoints - spark-1 (localhost) and spark-2 (remote)
+const INFERENCE_URLS = [
+  process.env.INFERENCE_URL || `http://localhost:${process.env.INFERENCE_PORT || 8004}`,
+  'http://192.168.1.63:8004',  // spark-2 fallback
+];
+let activeInferenceUrl = INFERENCE_URLS[0];
 
 const FILES_DIR = process.env.FILES_DIR || join(import.meta.dir, '../../files');
 const OUTPUT_DIR = process.env.OUTPUT_DIR || join(import.meta.dir, '../../output');
@@ -190,6 +196,17 @@ async function getModelId(url: string): Promise<string | null> {
   }
 }
 
+async function findInferenceEndpoint(): Promise<string | null> {
+  for (const url of INFERENCE_URLS) {
+    const modelId = await getModelId(url);
+    if (modelId) {
+      activeInferenceUrl = url;
+      return url;
+    }
+  }
+  return null;
+}
+
 async function checkService(url: string): Promise<boolean> {
   try {
     await axios.get(`${url}/health`, { timeout: 5000 });
@@ -203,9 +220,11 @@ async function getEmbeddings(text: string): Promise<number[]> {
   const modelId = await getModelId(EMBEDDINGS_URL);
   if (!modelId) throw new Error('Embeddings model not available');
 
+  // Truncate to 1500 chars to stay under 512 token limit
+  const truncated = text.slice(0, 1500);
   const response = await axios.post(
     `${EMBEDDINGS_URL}/v1/embeddings`,
-    { model: modelId, input: text },
+    { model: modelId, input: truncated },
     { timeout: 60000 }
   );
   return response.data.data[0].embedding;
@@ -234,7 +253,7 @@ async function runOCR(imageBase64: string): Promise<string> {
 }
 
 async function runInference(prompt: string, systemPrompt?: string): Promise<string> {
-  const modelId = await getModelId(INFERENCE_URL);
+  const modelId = await getModelId(activeInferenceUrl);
   if (!modelId) throw new Error('Inference model not available');
 
   const messages: Array<{ role: string; content: string }> = [];
@@ -242,7 +261,7 @@ async function runInference(prompt: string, systemPrompt?: string): Promise<stri
   messages.push({ role: 'user', content: prompt });
 
   const response = await axios.post(
-    `${INFERENCE_URL}/v1/chat/completions`,
+    `${activeInferenceUrl}/v1/chat/completions`,
     { model: modelId, messages, max_tokens: 2048, temperature: 0.3 },
     { timeout: 120000 }
   );
@@ -345,11 +364,17 @@ program
 
     const embAvailable = await checkService(EMBEDDINGS_URL);
     const ocrAvailable = await checkService(OCR_URL);
-    const infAvailable = await checkService(INFERENCE_URL);
+    const infEndpoint = await findInferenceEndpoint();
+    const infAvailable = !!infEndpoint;
 
     console.log(embAvailable ? chalk.green.bold('  [OK] Embeddings') : chalk.red.bold('  [X] Embeddings'));
     console.log(ocrAvailable ? chalk.green.bold('  [OK] OCR (HunyuanOCR)') : chalk.red.bold('  [X] OCR'));
-    console.log(infAvailable ? chalk.green.bold('  [OK] Inference') : chalk.dim('  [--] Inference (optional)'));
+    if (infAvailable) {
+      const host = activeInferenceUrl.includes('192.168.1.63') ? 'spark-2' : 'spark-1';
+      console.log(chalk.green.bold(`  [OK] Inference (${host})`));
+    } else {
+      console.log(chalk.dim('  [--] Inference (optional)'));
+    }
     console.log('');
 
     if (!embAvailable || !ocrAvailable) {
@@ -375,7 +400,7 @@ program
 
     const pdfName = basename(pdfPath);
     console.log(chalk.cyan.bold(`Processing: ${pdfName}`));
-    console.log(chalk.gray(`Path: ${pdfPath}`));
+    console.log(chalk.white(`Path: ${pdfPath}`));
     console.log('');
 
     mkdirSync(options.output, { recursive: true });
@@ -385,7 +410,7 @@ program
     // STEP 1: PDF to Images
     // ================================================================
     console.log(chalk.yellow.bold('Step 1: Converting PDF to Images'));
-    console.log(chalk.gray('-'.repeat(50)));
+    console.log(chalk.white('-'.repeat(50)));
 
     let gpuBefore = getGpuStats();
     let stepStart = performance.now();
@@ -407,7 +432,7 @@ program
     });
 
     console.log(chalk.green(`  Converted ${imagePaths.length} pages in ${formatTime(stepEnd - stepStart)}`));
-    console.log(chalk.gray(`  Processing first ${maxPages} pages`));
+    console.log(chalk.white(`  Processing first ${maxPages} pages`));
     console.log('');
 
     // ================================================================
@@ -835,7 +860,7 @@ program
   .command('status')
   .description('Show GPU and service status')
   .action(async () => {
-    console.log(chalk.blue.bold('\nvLLM Hydra Status\n'));
+    console.log(chalk.cyan.bold.bold('\nvLLM Hydra Status\n'));
 
     // GPU Status
     const gpu = getGpuStats();
@@ -849,7 +874,7 @@ program
       console.log(`  Memory:      ${memColor(`${gpu.memoryUsedMB.toFixed(0)}/${gpu.memoryTotalMB.toFixed(0)} MB (${memPercent.toFixed(0)}%)`)}`);
       console.log(`  Temperature: ${gpu.temperature}C`);
     } else {
-      console.log(chalk.gray('GPU: Not available'));
+      console.log(chalk.white('GPU: Not available'));
     }
     console.log('');
 
@@ -857,11 +882,16 @@ program
     console.log(chalk.cyan('Services:'));
     const embOk = await checkService(EMBEDDINGS_URL);
     const ocrOk = await checkService(OCR_URL);
-    const infOk = await checkService(INFERENCE_URL);
+    const infEndpoint = await findInferenceEndpoint();
 
     console.log(`  Embeddings (8001): ${embOk ? chalk.green('Ready') : chalk.red('Not available')}`);
     console.log(`  OCR (8003):        ${ocrOk ? chalk.green('Ready') : chalk.red('Not available')}`);
-    console.log(`  Inference (8004):  ${infOk ? chalk.green('Ready') : chalk.yellow('Not available')}`);
+    if (infEndpoint) {
+      const host = activeInferenceUrl.includes('192.168.1.63') ? 'spark-2' : 'spark-1';
+      console.log(`  Inference (8004):  ${chalk.green(`Ready (${host})`)}`);
+    } else {
+      console.log(`  Inference (8004):  ${chalk.yellow('Not available')}`);
+    }
     console.log('');
   });
 

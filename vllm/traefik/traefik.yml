@@ -1,5 +1,11 @@
 # Traefik Static Configuration
 # Load balancer for vLLM Hydra services
+#
+# Entry Points:
+#   - :8000 - Embeddings LB (spark-1:8001, spark-1:8002, spark-2:8001)
+#   - :8010 - OCR LB (spark-1:8003, spark-2:8003)
+#   - :8020 - Inference LB (spark-1:8004, spark-2:8004)
+#   - :8080 - Traefik Dashboard
 
 api:
   dashboard: true
@@ -8,6 +14,10 @@ api:
 entryPoints:
   embeddings:
     address: ":8000"
+  ocr:
+    address: ":8010"
+  inference:
+    address: ":8020"
   traefik:
     address: ":8080"
 

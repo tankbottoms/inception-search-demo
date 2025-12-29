@@ -1,8 +1,64 @@
 # TODO - vLLM Hydra Cluster
 
-## Status: v2.2.0 Complete
+## Status: v2.5.1 Complete
 
-All primary objectives for v2.2.0 have been achieved.
+All primary objectives for v2.5.1 have been achieved. Documentation reviewed and verified.
+
+---
+
+## Completed (v2.5.0)
+
+### Comprehensive Stability Benchmark
+- [x] Create stability-test.ts with full pipeline (OCR → Embed → Citation → Summary)
+- [x] Forward/backward iteration support (2x forward + 2x backward)
+- [x] Detailed per-document metrics and projections
+- [x] 100% pass rate across 52 document tests (13 PDFs × 4 iterations)
+
+### Expanded Blue Book Citation
+- [x] Support ALL document types (not just court cases)
+- [x] Court cases, statutes, books, articles, reports, SEC filings, resumes, websites
+- [x] Automatic fallback to file metadata for unparseable content
+- [x] Extract reasoning from GPT-OSS chain-of-thought responses
+
+### Summary Generation
+- [x] 2-3 sentence document summaries via GPT-OSS
+- [x] Identifies document type and key content
+
+### Infrastructure Updates
+- [x] Renamed load balancer: `embeddings-lb` → `inception-services-lb`
+- [x] New Makefile targets: stability, stability-5, benchmark-comprehensive
+- [x] Updated Traefik configuration for new service name
+
+---
+
+## Completed (v2.4.0)
+
+### True Parallel OCR Processing
+- [x] Fix OCR pipeline to use concurrent queue instead of batch-sequential
+- [x] 4 concurrent OCR tasks across 2 nodes (2 per endpoint)
+- [x] GPU utilization verified on both nodes (50-80%)
+- [x] Parallel OCR test script with GPU monitoring
+- [x] 4.3x throughput improvement (8 images: 11s → 2.6s)
+
+### Spark-2 Optimization
+- [x] 2nd ModernBERT instance starts by default (GPT-OSS disabled)
+- [x] Traefik load balancer routes to 4 embedding backends
+- [x] Simplified container naming (removed `-spark2` suffix)
+
+---
+
+## Completed (v2.3.0)
+
+### Spark-2 Stability & Configuration
+- [x] Switch spark-2 from port mapping to host network mode
+- [x] Disable GPT-OSS on spark-2 by default (conflicts with OCR)
+- [x] Update Makefile with new spark-2 commands
+- [x] All 14 verification tests passing
+
+### Claude Code Integration
+- [x] Global CLAUDE.md with Pushover notification instructions
+- [x] Rate-limited notifications (max 1 per 10 minutes)
+- [x] vLLM Hydra project context in global instructions
 
 ---
 
@@ -94,15 +150,19 @@ All primary objectives for v2.2.0 have been achieved.
 | Verification tests | 100% pass | 14/14 pass | Achieved |
 | CoT demo examples | 4 | 4 working | Complete |
 | Stress test p99 | <100ms | 44ms | Exceeded |
+| Stability test | 100% pass | 52/52 pass | Achieved |
+| Citation generation | All docs | All types supported | Complete |
 
 ---
 
 ## Project Complete
 
-The vLLM Hydra Cluster v2.2.0 is feature-complete with:
+The vLLM Hydra Cluster v2.5.0 is feature-complete with:
 - Full Makefile-based workflow
-- Comprehensive verification suite
+- Comprehensive verification and stability suites
 - Chain-of-thought reasoning demos
 - Load balancer stress testing
-- Multi-node deployment documentation
+- Multi-node deployment (spark-1 + spark-2)
+- Expanded Blue Book citations for all document types
+- Summary generation via GPT-OSS
 - All performance targets met or exceeded

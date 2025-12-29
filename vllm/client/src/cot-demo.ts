@@ -19,7 +19,13 @@
 import axios from 'axios';
 import chalk from 'chalk';
 
-const INFERENCE_URL = process.env.INFERENCE_URL || 'http://localhost:8004';
+// Inference endpoints - spark-1 (localhost) and spark-2 (remote)
+const INFERENCE_URLS = [
+  process.env.INFERENCE_URL || 'http://localhost:8004',
+  'http://192.168.1.63:8004',  // spark-2 fallback
+];
+
+let activeInferenceUrl = INFERENCE_URLS[0];
 
 // ============================================================
 // Types
@@ -196,15 +202,23 @@ Am I correct? Show your work to verify.`,
 // ============================================================
 
 async function getModelId(): Promise<string> {
-  try {
-    const response = await axios.get(`${INFERENCE_URL}/v1/models`, { timeout: 5000 });
-    if (response.data.data && response.data.data.length > 0) {
-      return response.data.data[0].id;
+  // Try each inference endpoint
+  for (const url of INFERENCE_URLS) {
+    try {
+      const response = await axios.get(`${url}/v1/models`, { timeout: 5000 });
+      if (response.data.data && response.data.data.length > 0) {
+        activeInferenceUrl = url;
+        const host = url.includes('192.168.1.63') ? 'spark-2' : 'spark-1';
+        if (url !== INFERENCE_URLS[0]) {
+          console.log(chalk.cyan(`  Using ${host} (${url})`));
+        }
+        return response.data.data[0].id;
+      }
+    } catch {
+      // Try next endpoint
     }
-  } catch (error) {
-    throw new Error(`Cannot connect to inference service at ${INFERENCE_URL}`);
   }
-  throw new Error('No model available');
+  throw new Error(`Cannot connect to inference service. Tried: ${INFERENCE_URLS.join(', ')}`);
 }
 
 async function runReasoningQuery(
@@ -223,7 +237,7 @@ async function runReasoningQuery(
   const startTime = performance.now();
 
   const response = await axios.post<GptOssChatResponse>(
-    `${INFERENCE_URL}/v1/chat/completions`,
+    `${activeInferenceUrl}/v1/chat/completions`,
     {
       model: modelId,
       messages,
@@ -300,14 +314,14 @@ function printResult(result: ReasoningResult, showFullMetrics: boolean = true) {
   // Metrics
   if (showFullMetrics) {
     printSection('Metrics');
-    console.log(chalk.gray(`  Duration:       ${result.timing.durationMs.toFixed(0)}ms`));
-    console.log(chalk.gray(`  Prompt tokens:  ${result.usage.promptTokens}`));
-    console.log(chalk.gray(`  Output tokens:  ${result.usage.completionTokens}`));
-    console.log(chalk.gray(`  Total tokens:   ${result.usage.totalTokens}`));
-    console.log(chalk.gray(`  Speed:          ${(result.usage.completionTokens / (result.timing.durationMs / 1000)).toFixed(1)} tokens/sec`));
-    console.log(chalk.gray(`  Finish reason:  ${result.finishReason}`));
+    console.log(chalk.white(`  Duration:       ${result.timing.durationMs.toFixed(0)}ms`));
+    console.log(chalk.white(`  Prompt tokens:  ${result.usage.promptTokens}`));
+    console.log(chalk.white(`  Output tokens:  ${result.usage.completionTokens}`));
+    console.log(chalk.white(`  Total tokens:   ${result.usage.totalTokens}`));
+    console.log(chalk.white(`  Speed:          ${(result.usage.completionTokens / (result.timing.durationMs / 1000)).toFixed(1)} tokens/sec`));
+    console.log(chalk.white(`  Finish reason:  ${result.finishReason}`));
   } else {
-    console.log(chalk.gray(`\n  [${result.timing.durationMs.toFixed(0)}ms | ${result.usage.completionTokens} tokens | ${(result.usage.completionTokens / (result.timing.durationMs / 1000)).toFixed(1)} tok/s]`));
+    console.log(chalk.white(`\n  [${result.timing.durationMs.toFixed(0)}ms | ${result.usage.completionTokens} tokens | ${(result.usage.completionTokens / (result.timing.durationMs / 1000)).toFixed(1)} tok/s]`));
   }
 }
 
@@ -392,7 +406,7 @@ async function runTestSuite(testName?: string) {
 
     if (testName && !TEST_CASES[testName as keyof typeof TEST_CASES]) {
       console.log(chalk.red(`Unknown test: ${testName}`));
-      console.log(chalk.gray(`Available tests: ${Object.keys(TEST_CASES).join(', ')}`));
+      console.log(chalk.white(`Available tests: ${Object.keys(TEST_CASES).join(', ')}`));
       process.exit(1);
     }
 
@@ -406,7 +420,7 @@ async function runTestSuite(testName?: string) {
       printSection('User Prompt');
       console.log(chalk.white(test.prompt));
 
-      console.log(chalk.gray('\nRunning query...'));
+      console.log(chalk.white('\nRunning query...'));
       const result = await runReasoningQuery(test.prompt, undefined, test.maxTokens);
 
       printResult(result);
@@ -424,7 +438,7 @@ async function runTestSuite(testName?: string) {
       } else {
         console.log(chalk.red.bold('  FAILED'));
       }
-      console.log(chalk.gray(`  ${verification.details}`));
+      console.log(chalk.white(`  ${verification.details}`));
 
       results.push({
         name: test.name,
@@ -445,12 +459,12 @@ async function runTestSuite(testName?: string) {
 
     for (const r of results) {
       const status = r.passed ? chalk.green.bold('PASS') : chalk.red.bold('FAIL');
-      console.log(`  ${status}  ${r.name.padEnd(30)} ${chalk.gray(`${r.duration.toFixed(0)}ms`)}`);
+      console.log(`  ${status}  ${r.name.padEnd(30)} ${chalk.white(`${r.duration.toFixed(0)}ms`)}`);
     }
 
     console.log('');
     console.log(chalk.white.bold(`  Results: ${passed}/${results.length} passed`));
-    console.log(chalk.gray(`  Total time: ${(totalTime / 1000).toFixed(1)}s`));
+    console.log(chalk.white(`  Total time: ${(totalTime / 1000).toFixed(1)}s`));
 
     console.log(chalk.cyan.bold('\n' + '='.repeat(80) + '\n'));
 
@@ -468,14 +482,14 @@ async function runFullDemo(quick: boolean = false) {
   const examples = quick ? QUICK_EXAMPLES : DEMO_EXAMPLES;
 
   console.log(chalk.white.bold('GPT-OSS 20B Chain-of-Thought Demonstration\n'));
-  console.log(chalk.gray('This demo runs automatically through multiple reasoning examples.'));
-  console.log(chalk.gray('Each example shows the model\'s internal reasoning process'));
-  console.log(chalk.gray('followed by its final response.\n'));
+  console.log(chalk.white('This demo runs automatically through multiple reasoning examples.'));
+  console.log(chalk.white('Each example shows the model\'s internal reasoning process'));
+  console.log(chalk.white('followed by its final response.\n'));
 
   try {
     const modelId = await getModelId();
     console.log(chalk.green(`Connected to: ${modelId}`));
-    console.log(chalk.gray(`Examples to run: ${examples.length}\n`));
+    console.log(chalk.white(`Examples to run: ${examples.length}\n`));
 
     const results: Array<{
       category: string;
@@ -495,7 +509,7 @@ async function runFullDemo(quick: boolean = false) {
       printSection('User Prompt');
       console.log(chalk.white(example.prompt));
 
-      console.log(chalk.gray('\n  Processing...\n'));
+      console.log(chalk.white('\n  Processing...\n'));
 
       const result = await runReasoningQuery(example.prompt, undefined, example.maxTokens);
 
@@ -510,7 +524,7 @@ async function runFullDemo(quick: boolean = false) {
         } else {
           console.log(chalk.yellow.bold('  PARTIAL'));
         }
-        console.log(chalk.gray(`  ${verification.details}`));
+        console.log(chalk.white(`  ${verification.details}`));
 
         results.push({
           category: example.category,
@@ -536,7 +550,7 @@ async function runFullDemo(quick: boolean = false) {
     console.log(chalk.white.bold('  Results by Example:\n'));
     for (const r of results) {
       const status = r.passed ? chalk.green('OK') : chalk.yellow('--');
-      console.log(`    ${status}  ${r.category.padEnd(25)} ${chalk.gray(`${(r.duration / 1000).toFixed(1)}s`)} ${chalk.dim(`(${r.tokensPerSec.toFixed(0)} tok/s)`)}`);
+      console.log(`    ${status}  ${r.category.padEnd(25)} ${chalk.white(`${(r.duration / 1000).toFixed(1)}s`)} ${chalk.dim(`(${r.tokensPerSec.toFixed(0)} tok/s)`)}`);
     }
 
     const totalTime = results.reduce((sum, r) => sum + r.duration, 0);
@@ -545,10 +559,10 @@ async function runFullDemo(quick: boolean = false) {
 
     console.log('');
     console.log(chalk.white.bold('  Overall:'));
-    console.log(chalk.gray(`    Examples completed: ${results.length}`));
-    console.log(chalk.gray(`    Verification passed: ${passedCount}/${results.length}`));
-    console.log(chalk.gray(`    Total time: ${(totalTime / 1000).toFixed(1)}s`));
-    console.log(chalk.gray(`    Avg throughput: ${avgTokPerSec.toFixed(1)} tokens/sec`));
+    console.log(chalk.white(`    Examples completed: ${results.length}`));
+    console.log(chalk.white(`    Verification passed: ${passedCount}/${results.length}`));
+    console.log(chalk.white(`    Total time: ${(totalTime / 1000).toFixed(1)}s`));
+    console.log(chalk.white(`    Avg throughput: ${avgTokPerSec.toFixed(1)} tokens/sec`));
 
     console.log(chalk.cyan.bold('\n' + '='.repeat(80)));
     console.log(chalk.green.bold('              Chain-of-Thought Demo Complete'));

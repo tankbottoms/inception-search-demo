@@ -1,11 +1,18 @@
 # Inception ONNX - CPU Build
 # TypeScript/Bun inference backend with ONNX Runtime
+# Uses Debian for glibc compatibility with onnxruntime-node
 
-FROM oven/bun:1-alpine AS base
+FROM oven/bun:1-debian AS base
 
 WORKDIR /app
 
-# Install dependencies
+# Install required system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Dependencies stage
 FROM base AS deps
 COPY package.json bun.lockb* ./
 RUN bun install --frozen-lockfile || bun install
@@ -27,16 +34,16 @@ ENV MODEL_REGISTRY=/models/registry.json
 ENV LOG_LEVEL=info
 
 # Create non-root user
-RUN addgroup --system --gid 1001 nodejs && \
-    adduser --system --uid 1001 inference
+RUN groupadd --system --gid 1001 nodejs && \
+    useradd --system --uid 1001 --gid nodejs inference
 
-# Copy built application
-COPY --from=deps /app/node_modules ./node_modules
-COPY --from=build /app/src ./src
-COPY --from=build /app/package.json ./
+# Copy built application with ownership
+COPY --from=deps --chown=inference:nodejs /app/node_modules ./node_modules
+COPY --from=build --chown=inference:nodejs /app/src ./src
+COPY --from=build --chown=inference:nodejs /app/package.json ./
 
 # Create models directory
-RUN mkdir -p /models && chown -R inference:nodejs /models
+RUN mkdir -p /models && chown -R inference:nodejs /models /app
 
 USER inference
 

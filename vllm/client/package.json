@@ -1,6 +1,6 @@
 {
   "name": "vllm-hydra-client",
-  "version": "2.2.0",
+  "version": "2.5.0",
   "description": "Demo and benchmark client for vLLM Hydra cluster",
   "type": "module",
   "scripts": {
@@ -10,6 +10,7 @@
     "ocr": "bun run src/index.ts ocr",
     "pipeline": "bun run src/index.ts pipeline",
     "benchmark": "bun run src/index.ts benchmark",
+    "benchmark:extended": "FILES_DIR=../../demo/files bun run src/ocr-pipeline.ts --benchmark",
     "test": "bun run src/index.ts test",
     "health": "bun run src/index.ts health",
     "cot": "bun run src/cot-demo.ts",
@@ -26,7 +27,14 @@
     "verify:search": "bun run src/verify-demo.ts --search",
     "stress": "bun run src/stress-test.ts",
     "stress:compare": "bun run src/stress-test.ts --compare",
-    "stress:lb": "bun run src/stress-test.ts --lb"
+    "stress:lb": "bun run src/stress-test.ts --lb",
+    "parallel-ocr": "bun run src/parallel-ocr-test.ts",
+    "parallel-ocr:8": "bun run src/parallel-ocr-test.ts --count 8",
+    "parallel-ocr:seq": "bun run src/parallel-ocr-test.ts --sequential",
+    "stability": "FILES_DIR=../../demo/files bun run src/stability-test.ts",
+    "stability:5": "FILES_DIR=../../demo/files bun run src/stability-test.ts --iterations 5",
+    "benchmark:fb": "FILES_DIR=../../demo/files bun run src/stability-test.ts --iterations 2 --forward-backward",
+    "benchmark:comprehensive": "FILES_DIR=../../demo/files bun run src/stability-test.ts --iterations 2 --forward-backward"
   },
   "dependencies": {
     "axios": "^1.7.0",

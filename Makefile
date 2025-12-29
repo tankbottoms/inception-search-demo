@@ -1,161 +1,203 @@
 # Inception ONNX - Makefile
 # Quick commands for development and deployment
+# Auto-detects platform (Apple Silicon, x86, NVIDIA GPU)
 
-.PHONY: help setup clean dev start test demo docker-up docker-down benchmark pipeline ocr test-all
+.PHONY: help build up down services logs benchmark benchmark-extended test clean
 
-# Default target
+# Detect platform
+PROFILE := $(shell ./scripts/detect-platform.sh profile 2>/dev/null || echo "cpu")
+PLATFORM := $(shell ./scripts/detect-platform.sh platform 2>/dev/null || echo "unknown")
+
+# ============================================================
+# Main Commands (Auto-Detecting)
+# ============================================================
+
 help:
-	@echo "Inception ONNX - Available Commands"
+	@echo "Inception ONNX - Simplified Commands"
 	@echo ""
-	@echo "Setup & Development:"
-	@echo "  make setup       - Full setup: install deps, convert models, validate"
-	@echo "  make install     - Install all dependencies"
-	@echo "  make clean       - Clean build artifacts and demo output"
-	@echo "  make clean-all   - Clean everything including models"
-	@echo "  make dev         - Start development server with hot reload"
-	@echo "  make start       - Start production server"
+	@echo "Detected Platform: $(PLATFORM) (profile: $(PROFILE))"
 	@echo ""
-	@echo "Testing & Benchmarks:"
-	@echo "  make test        - Run tests"
-	@echo "  make check       - Check model availability"
-	@echo "  make benchmark   - Run performance benchmarks"
-	@echo "  make test-all    - Run complete system verification"
+	@echo "Primary Commands:"
+	@echo "  make build              - Build containers for detected platform"
+	@echo "  make up / make services - Start services (auto-detects CPU/GPU)"
+	@echo "  make down               - Stop all services"
+	@echo "  make logs               - View service logs"
+	@echo "  make benchmark          - Run performance benchmark"
+	@echo "  make benchmark-extended - Run extended benchmark with test files"
 	@echo ""
-	@echo "Demo Pipeline:"
-	@echo "  make demo        - Run text extraction demo (PDF -> embed -> search)"
-	@echo "  make pipeline    - Run OCR pipeline (PDF -> OCR -> embed -> search)"
-	@echo "  make ocr         - Process single PDF/image with OCR"
-	@echo "  make search Q=   - Search indexed documents (Q='your query')"
+	@echo "Development:"
+	@echo "  make dev                - Start dev server (no Docker)"
+	@echo "  make test               - Run tests"
+	@echo "  make setup              - Full setup (deps, models, validation)"
 	@echo ""
-	@echo "Docker:"
-	@echo "  make docker-up   - Start Docker stack (auto-detects GPU)"
-	@echo "  make docker-down - Stop Docker stack"
-	@echo "  make docker-logs - View Docker logs"
+	@echo "Force Specific Platform:"
+	@echo "  make build-cpu          - Force CPU build"
+	@echo "  make build-gpu          - Force GPU build"
+	@echo "  make up-cpu             - Force CPU services"
+	@echo "  make up-gpu             - Force GPU services"
 	@echo ""
 
-# Install dependencies
-install:
-	@echo "Installing backend dependencies..."
-	@bun install
-	@echo "Installing demo dependencies..."
-	@cd demo && bun install
-	@echo "Done!"
+# ============================================================
+# Auto-Detecting Commands
+# ============================================================
 
-# Setup
-setup:
-	./scripts/setup.sh
+# Build for detected platform
+build:
+	@echo "Building for platform: $(PLATFORM) (profile: $(PROFILE))"
+	docker compose --profile $(PROFILE) build
 
-# Clean
-clean:
-	./scripts/clean.sh
+# Start services for detected platform
+up: services
+services:
+	@echo "Starting services for platform: $(PLATFORM) (profile: $(PROFILE))"
+	docker compose --profile $(PROFILE) up -d
+	@echo ""
+	@echo "Waiting for health check..."
+	@sleep 5
+	@curl -sf http://localhost:8005/health && echo "Service ready at http://localhost:8005" || echo "Service starting..."
 
-clean-all:
-	./scripts/clean.sh --all
+# Stop all services
+down:
+	docker compose --profile cpu --profile gpu --profile llm-cpu --profile llm-gpu down --remove-orphans
 
-clean-models:
-	./scripts/clean.sh --models
+# View logs
+logs:
+	docker compose logs -f
 
-clean-demo:
-	@rm -rf demo/output/*
-	@echo "Demo output cleaned"
+# ============================================================
+# Benchmarks
+# ============================================================
 
-# Development
+benchmark:
+	@echo "Running benchmark for platform: $(PLATFORM)"
+	@if [ "$(PROFILE)" = "gpu" ]; then \
+		./scripts/benchmark-cpu-gpu.sh --gpu-only --iterations 10; \
+	else \
+		./scripts/benchmark-cpu-gpu.sh --cpu-only --iterations 10; \
+	fi
+
+benchmark-extended:
+	@echo "Running extended benchmark (CPU vs GPU comparison)"
+	./scripts/benchmark-cpu-gpu.sh --iterations 50 --warmup 10
+
+benchmark-quick:
+	@echo "Running quick benchmark"
+	@if [ "$(PROFILE)" = "gpu" ]; then \
+		./scripts/benchmark-cpu-gpu.sh --gpu-only --iterations 5 --warmup 2; \
+	else \
+		./scripts/benchmark-cpu-gpu.sh --cpu-only --iterations 5 --warmup 2; \
+	fi
+
+# ============================================================
+# Force Specific Platform
+# ============================================================
+
+build-cpu:
+	docker compose --profile cpu build
+
+build-gpu:
+	docker compose --profile gpu build
+
+up-cpu:
+	docker compose --profile cpu up -d
+
+up-gpu:
+	docker compose --profile gpu up -d
+
+# ============================================================
+# Development (No Docker)
+# ============================================================
+
 dev:
 	bun run dev
 
 start:
 	bun run start
 
-start-bg:
-	@echo "Starting backend in background..."
-	@bun run start > /tmp/inception.log 2>&1 &
-	@sleep 3
-	@curl -s http://localhost:8005/health | grep -q ok && echo "Backend started on port 8005" || echo "Failed to start backend"
-
-stop:
-	@pkill -f "bun.*src/index.ts" 2>/dev/null || true
-	@echo "Backend stopped"
-
-# Testing
 test:
 	bun test
 
-check:
-	bun run cli -- --check
+typecheck:
+	bun run typecheck
 
-# Benchmarks
-benchmark:
-	bun run cli -- --benchmark
+# ============================================================
+# Setup & Installation
+# ============================================================
 
-benchmark-demo:
-	@cd demo && bun run benchmark
+setup:
+	./scripts/setup.sh
 
-# Demo - Text extraction pipeline
+install:
+	@echo "Installing dependencies..."
+	@bun install
+	@if [ -d demo ]; then cd demo && bun install; fi
+	@echo "Done!"
+
+clean:
+	./scripts/clean.sh
+
+clean-all:
+	./scripts/clean.sh --all
+
+# ============================================================
+# Demo & Pipeline
+# ============================================================
+
 demo:
-	@echo "=== PDF Text Extraction Demo ==="
+	@echo "=== Running Demo ==="
 	@cd demo && bun run demo
 
-# OCR Pipeline
 pipeline:
 	@echo "=== Full OCR Pipeline ==="
 	@cd demo && bun run pipeline
 
-pipeline-force-ocr:
-	@echo "=== Full OCR Pipeline (forced OCR) ==="
-	@cd demo && bun run src/index.ts pipeline --force-ocr
-
-# Single OCR
 ocr:
 	@cd demo && bun run ocr
 
-ocr-pdf:
-	@cd demo && bun run src/index.ts ocr --pdf $(PDF)
-
-ocr-image:
-	@cd demo && bun run src/index.ts ocr --image $(IMAGE)
-
-# Search
 search:
 	@cd demo && bun run search "$(Q)"
 
-# Index management
-index:
-	@cd demo && bun run index
+# ============================================================
+# Model Management
+# ============================================================
 
-index-force:
-	@cd demo && bun run src/index.ts index --force
+convert-models:
+	@echo "Converting models..."
+	@cd converter && source .venv/bin/activate && python convert.py --from-registry ../models/registry.json
 
-# Docker
-docker-up:
-	@if nvidia-smi &>/dev/null; then \
-		echo "GPU detected, starting with CUDA support..."; \
-		docker compose --profile gpu up -d; \
+check-models:
+	bun run cli -- --check
+
+# ============================================================
+# LLM Model Server (Python Backend)
+# ============================================================
+
+llm-up:
+	@if [ "$(PROFILE)" = "gpu" ]; then \
+		docker compose --profile llm-gpu up -d; \
 	else \
-		echo "No GPU, starting CPU mode..."; \
-		docker compose --profile demo up -d; \
+		docker compose --profile llm-cpu up -d; \
 	fi
 
-docker-down:
-	docker compose down
+llm-down:
+	docker compose --profile llm-cpu --profile llm-gpu down
 
-docker-logs:
-	docker compose logs -f
+llm-logs:
+	docker compose logs -f llm-model-server-cpu llm-model-server-gpu 2>/dev/null || true
 
-docker-demo:
-	docker compose --profile demo up
+# ============================================================
+# Status & Info
+# ============================================================
 
-# Model management
-convert-models:
-	cd converter && source .venv/bin/activate && python convert.py --from-registry ../models/registry.json
+status:
+	@echo "=== Platform Detection ==="
+	@./scripts/detect-platform.sh all
+	@echo ""
+	@echo "=== Docker Services ==="
+	@docker compose ps 2>/dev/null || echo "No services running"
+	@echo ""
+	@echo "=== Service Health ==="
+	@curl -sf http://localhost:8005/health 2>/dev/null && echo "Inception API: OK (port 8005)" || echo "Inception API: Not running"
+	@curl -sf http://localhost:8006/health 2>/dev/null && echo "LLM Server:    OK (port 8006)" || echo "LLM Server:    Not running"
 
-# Type checking
-typecheck:
-	bun run typecheck
-
-# Format/lint
-lint:
-	bun run lint
-
-# Complete system verification
-test-all:
-	@./scripts/test-all.sh
+info: status

@@ -22,6 +22,28 @@ import { execSync } from 'child_process';
 // Service URLs
 const EMBEDDINGS_URL = process.env.EMBEDDINGS_URL || 'http://localhost:8001';
 const OCR_URL = process.env.OCR_URL || 'http://localhost:8003';
+const SPARK2_IP = process.env.SPARK2_IP || '192.168.1.63';
+
+// All endpoints for service discovery
+const ALL_ENDPOINTS = {
+  spark1: {
+    embeddings1: 'http://localhost:8001',
+    embeddings2: 'http://localhost:8002',
+    ocr: 'http://localhost:8003',
+    inference: 'http://localhost:8004',
+  },
+  spark2: {
+    embeddings1: `http://${SPARK2_IP}:8001`,
+    embeddings2: `http://${SPARK2_IP}:8002`,
+    ocr: `http://${SPARK2_IP}:8003`,
+    inference: `http://${SPARK2_IP}:8004`,
+  },
+  loadBalancers: {
+    embeddings: 'http://localhost:8000',
+    ocr: 'http://localhost:8010',
+    inference: 'http://localhost:8020',
+  },
+};
 
 // ============================================================
 // Types
@@ -192,7 +214,7 @@ async function verifyOcr(): Promise<VerificationResult[]> {
   }
 
   console.log(chalk.white.bold('\n  OCR Verification Tests\n'));
-  console.log(chalk.gray(`  Model: ${modelId}\n`));
+  console.log(chalk.white(`  Model: ${modelId}\n`));
 
   // Test cases with expected text
   const testCases = [
@@ -220,7 +242,7 @@ async function verifyOcr(): Promise<VerificationResult[]> {
 
   for (const tc of testCases) {
     const start = performance.now();
-    process.stdout.write(chalk.gray(`    ${tc.name}: `));
+    process.stdout.write(chalk.white(`    ${tc.name}: `));
 
     try {
       const imageBuffer = await createTextImage(tc.text, 800, 150, 40);
@@ -232,11 +254,11 @@ async function verifyOcr(): Promise<VerificationResult[]> {
       const passed = similarity >= tc.threshold;
 
       if (passed) {
-        console.log(chalk.green(`PASS`) + chalk.gray(` (${(similarity * 100).toFixed(0)}% match, ${elapsed.toFixed(0)}ms)`));
+        console.log(chalk.green(`PASS`) + chalk.white(` (${(similarity * 100).toFixed(0)}% match, ${elapsed.toFixed(0)}ms)`));
       } else {
-        console.log(chalk.red(`FAIL`) + chalk.gray(` (${(similarity * 100).toFixed(0)}% match, need ${tc.threshold * 100}%)`));
-        console.log(chalk.gray(`      Expected: "${tc.text}"`));
-        console.log(chalk.gray(`      Got:      "${ocrResult.slice(0, 80)}"`));
+        console.log(chalk.red(`FAIL`) + chalk.white(` (${(similarity * 100).toFixed(0)}% match, need ${tc.threshold * 100}%)`));
+        console.log(chalk.white(`      Expected: "${tc.text}"`));
+        console.log(chalk.white(`      Got:      "${ocrResult.slice(0, 80)}"`));
       }
 
       results.push({
@@ -265,7 +287,7 @@ async function verifyOcr(): Promise<VerificationResult[]> {
 
   // Multi-line test
   const multiLineStart = performance.now();
-  process.stdout.write(chalk.gray(`    Multi-line Document: `));
+  process.stdout.write(chalk.white(`    Multi-line Document: `));
 
   try {
     const lines = [
@@ -285,9 +307,9 @@ async function verifyOcr(): Promise<VerificationResult[]> {
     const passed = phraseScore >= 0.5;
 
     if (passed) {
-      console.log(chalk.green(`PASS`) + chalk.gray(` (${foundPhrases.length}/${keyPhrases.length} phrases, ${elapsed.toFixed(0)}ms)`));
+      console.log(chalk.green(`PASS`) + chalk.white(` (${foundPhrases.length}/${keyPhrases.length} phrases, ${elapsed.toFixed(0)}ms)`));
     } else {
-      console.log(chalk.red(`FAIL`) + chalk.gray(` (only ${foundPhrases.length}/${keyPhrases.length} phrases found)`));
+      console.log(chalk.red(`FAIL`) + chalk.white(` (only ${foundPhrases.length}/${keyPhrases.length} phrases found)`));
     }
 
     results.push({
@@ -318,9 +340,11 @@ async function verifyOcr(): Promise<VerificationResult[]> {
 // ============================================================
 
 async function getEmbedding(text: string, modelId: string): Promise<number[]> {
+  // Truncate to 1500 chars to stay under 512 token limit
+  const truncated = text.slice(0, 1500);
   const response = await axios.post<EmbeddingResponse>(
     `${EMBEDDINGS_URL}/v1/embeddings`,
-    { model: modelId, input: text },
+    { model: modelId, input: truncated },
     { timeout: 30000 }
   );
   return response.data.data[0].embedding;
@@ -341,7 +365,7 @@ async function verifyEmbeddings(): Promise<VerificationResult[]> {
   }
 
   console.log(chalk.white.bold('\n  Embedding Verification Tests\n'));
-  console.log(chalk.gray(`  Model: ${modelId}\n`));
+  console.log(chalk.white(`  Model: ${modelId}\n`));
 
   // Test 1: Similar sentences should have high similarity
   const similarPairs = [
@@ -367,7 +391,7 @@ async function verifyEmbeddings(): Promise<VerificationResult[]> {
 
   for (const pair of similarPairs) {
     const start = performance.now();
-    process.stdout.write(chalk.gray(`    ${pair.name}: `));
+    process.stdout.write(chalk.white(`    ${pair.name}: `));
 
     try {
       const [embA, embB] = await Promise.all([
@@ -380,9 +404,9 @@ async function verifyEmbeddings(): Promise<VerificationResult[]> {
       const passed = similarity >= pair.minSim;
 
       if (passed) {
-        console.log(chalk.green(`PASS`) + chalk.gray(` (${(similarity * 100).toFixed(1)}% >= ${pair.minSim * 100}%, ${elapsed.toFixed(0)}ms)`));
+        console.log(chalk.green(`PASS`) + chalk.white(` (${(similarity * 100).toFixed(1)}% >= ${pair.minSim * 100}%, ${elapsed.toFixed(0)}ms)`));
       } else {
-        console.log(chalk.red(`FAIL`) + chalk.gray(` (${(similarity * 100).toFixed(1)}% < ${pair.minSim * 100}%)`));
+        console.log(chalk.red(`FAIL`) + chalk.white(` (${(similarity * 100).toFixed(1)}% < ${pair.minSim * 100}%)`));
       }
 
       results.push({
@@ -424,7 +448,7 @@ async function verifyEmbeddings(): Promise<VerificationResult[]> {
 
   for (const pair of dissimilarPairs) {
     const start = performance.now();
-    process.stdout.write(chalk.gray(`    ${pair.name}: `));
+    process.stdout.write(chalk.white(`    ${pair.name}: `));
 
     try {
       const [embA, embB] = await Promise.all([
@@ -437,9 +461,9 @@ async function verifyEmbeddings(): Promise<VerificationResult[]> {
       const passed = similarity <= pair.maxSim;
 
       if (passed) {
-        console.log(chalk.green(`PASS`) + chalk.gray(` (${(similarity * 100).toFixed(1)}% <= ${pair.maxSim * 100}%, ${elapsed.toFixed(0)}ms)`));
+        console.log(chalk.green(`PASS`) + chalk.white(` (${(similarity * 100).toFixed(1)}% <= ${pair.maxSim * 100}%, ${elapsed.toFixed(0)}ms)`));
       } else {
-        console.log(chalk.red(`FAIL`) + chalk.gray(` (${(similarity * 100).toFixed(1)}% > ${pair.maxSim * 100}%)`));
+        console.log(chalk.red(`FAIL`) + chalk.white(` (${(similarity * 100).toFixed(1)}% > ${pair.maxSim * 100}%)`));
       }
 
       results.push({
@@ -485,7 +509,7 @@ async function verifySearch(): Promise<VerificationResult[]> {
   }
 
   console.log(chalk.white.bold('\n  Search Ranking Verification Tests\n'));
-  console.log(chalk.gray(`  Model: ${modelId}\n`));
+  console.log(chalk.white(`  Model: ${modelId}\n`));
 
   // Document corpus
   const documents = [
@@ -521,7 +545,7 @@ async function verifySearch(): Promise<VerificationResult[]> {
   ];
 
   // Pre-compute document embeddings
-  process.stdout.write(chalk.gray(`    Indexing ${documents.length} documents... `));
+  process.stdout.write(chalk.white(`    Indexing ${documents.length} documents... `));
   const indexStart = performance.now();
 
   const docEmbeddings: Array<{ id: number; text: string; embedding: number[] }> = [];
@@ -529,12 +553,12 @@ async function verifySearch(): Promise<VerificationResult[]> {
     const embedding = await getEmbedding(doc.text, modelId);
     docEmbeddings.push({ ...doc, embedding });
   }
-  console.log(chalk.green(`done`) + chalk.gray(` (${(performance.now() - indexStart).toFixed(0)}ms)\n`));
+  console.log(chalk.green(`done`) + chalk.white(` (${(performance.now() - indexStart).toFixed(0)}ms)\n`));
 
   // Run search tests
   for (const test of searchTests) {
     const start = performance.now();
-    process.stdout.write(chalk.gray(`    ${test.name}: `));
+    process.stdout.write(chalk.white(`    ${test.name}: `));
 
     try {
       const queryEmbedding = await getEmbedding(test.query, modelId);
@@ -552,10 +576,10 @@ async function verifySearch(): Promise<VerificationResult[]> {
       const passed = topResult.id === test.expectedTop;
 
       if (passed) {
-        console.log(chalk.green(`PASS`) + chalk.gray(` (doc #${topResult.id} at ${(topResult.score * 100).toFixed(1)}%, ${elapsed.toFixed(0)}ms)`));
+        console.log(chalk.green(`PASS`) + chalk.white(` (doc #${topResult.id} at ${(topResult.score * 100).toFixed(1)}%, ${elapsed.toFixed(0)}ms)`));
       } else {
-        console.log(chalk.red(`FAIL`) + chalk.gray(` (expected #${test.expectedTop}, got #${topResult.id})`));
-        console.log(chalk.gray(`      Ranking: ${ranked.map(r => `#${r.id}:${(r.score * 100).toFixed(0)}%`).join(' > ')}`));
+        console.log(chalk.red(`FAIL`) + chalk.white(` (expected #${test.expectedTop}, got #${topResult.id})`));
+        console.log(chalk.white(`      Ranking: ${ranked.map(r => `#${r.id}:${(r.score * 100).toFixed(0)}%`).join(' > ')}`));
       }
 
       results.push({
@@ -588,12 +612,84 @@ async function verifySearch(): Promise<VerificationResult[]> {
 // Main
 // ============================================================
 
+async function checkEndpoint(url: string): Promise<{ healthy: boolean; model?: string }> {
+  try {
+    await axios.get(`${url}/health`, { timeout: 3000 });
+    const model = await getModelId(url);
+    return { healthy: true, model: model || undefined };
+  } catch {
+    return { healthy: false };
+  }
+}
+
+async function discoverServices(): Promise<void> {
+  console.log(chalk.white.bold('\nService Discovery'));
+  console.log(chalk.dim('-'.repeat(50)));
+
+  let embCount = 0, ocrCount = 0, infCount = 0;
+
+  // Spark-1
+  console.log(chalk.cyan.bold('\n  Spark-1 (localhost)'));
+  const s1e1 = await checkEndpoint(ALL_ENDPOINTS.spark1.embeddings1);
+  const s1e2 = await checkEndpoint(ALL_ENDPOINTS.spark1.embeddings2);
+  const s1o = await checkEndpoint(ALL_ENDPOINTS.spark1.ocr);
+  const s1i = await checkEndpoint(ALL_ENDPOINTS.spark1.inference);
+
+  console.log(s1e1.healthy ? chalk.green(`    [OK] Embeddings (8001)`) + chalk.dim(` - ${s1e1.model}`) : chalk.dim(`    [--] Embeddings (8001)`));
+  console.log(s1e2.healthy ? chalk.green(`    [OK] Embeddings (8002)`) + chalk.dim(` - ${s1e2.model}`) : chalk.dim(`    [--] Embeddings (8002)`));
+  console.log(s1o.healthy ? chalk.green(`    [OK] OCR (8003)`) + chalk.dim(` - ${s1o.model}`) : chalk.dim(`    [--] OCR (8003)`));
+  console.log(s1i.healthy ? chalk.green(`    [OK] Inference (8004)`) + chalk.dim(` - ${s1i.model}`) : chalk.dim(`    [--] Inference (8004)`));
+
+  if (s1e1.healthy) embCount++;
+  if (s1e2.healthy) embCount++;
+  if (s1o.healthy) ocrCount++;
+  if (s1i.healthy) infCount++;
+
+  // Spark-2
+  console.log(chalk.cyan.bold(`\n  Spark-2 (${SPARK2_IP})`));
+  const s2e1 = await checkEndpoint(ALL_ENDPOINTS.spark2.embeddings1);
+  const s2e2 = await checkEndpoint(ALL_ENDPOINTS.spark2.embeddings2);
+  const s2o = await checkEndpoint(ALL_ENDPOINTS.spark2.ocr);
+  const s2i = await checkEndpoint(ALL_ENDPOINTS.spark2.inference);
+
+  console.log(s2e1.healthy ? chalk.green(`    [OK] Embeddings (8001)`) + chalk.dim(` - ${s2e1.model}`) : chalk.dim(`    [--] Embeddings (8001)`));
+  console.log(s2e2.healthy ? chalk.green(`    [OK] Embeddings (8002)`) + chalk.dim(` - ${s2e2.model}`) : chalk.dim(`    [--] Embeddings (8002)`));
+  console.log(s2o.healthy ? chalk.green(`    [OK] OCR (8003)`) + chalk.dim(` - ${s2o.model}`) : chalk.dim(`    [--] OCR (8003)`));
+  console.log(s2i.healthy ? chalk.green(`    [OK] Inference (8004)`) + chalk.dim(` - ${s2i.model}`) : chalk.dim(`    [--] Inference (8004)`));
+
+  if (s2e1.healthy) embCount++;
+  if (s2e2.healthy) embCount++;
+  if (s2o.healthy) ocrCount++;
+  if (s2i.healthy) infCount++;
+
+  // Load Balancers
+  console.log(chalk.cyan.bold('\n  Load Balancers (Traefik)'));
+  const lbEmb = await checkEndpoint(ALL_ENDPOINTS.loadBalancers.embeddings);
+  const lbOcr = await checkEndpoint(ALL_ENDPOINTS.loadBalancers.ocr);
+  const lbInf = await checkEndpoint(ALL_ENDPOINTS.loadBalancers.inference);
+
+  console.log(lbEmb.healthy ? chalk.green(`    [OK] Embeddings LB (8000)`) + chalk.dim(` - ${embCount} backends`) : chalk.dim(`    [--] Embeddings LB (8000)`));
+  console.log(lbOcr.healthy ? chalk.green(`    [OK] OCR LB (8010)`) + chalk.dim(` - ${ocrCount} backends`) : chalk.dim(`    [--] OCR LB (8010)`));
+  console.log(lbInf.healthy ? chalk.green(`    [OK] Inference LB (8020)`) + chalk.dim(` - ${infCount} backends`) : chalk.dim(`    [--] Inference LB (8020)`));
+
+  // Summary (spark-2 embeddings are optional, so 2 is typical max)
+  const spark2EmbCount = (s2e1.healthy ? 1 : 0) + (s2e2.healthy ? 1 : 0);
+  console.log(chalk.cyan.bold('\n  Summary'));
+  console.log(chalk.white(`    Embeddings: ${Math.min(embCount, 2)}/2 instances`) + (spark2EmbCount > 0 ? chalk.dim(` (+${spark2EmbCount} spark-2)`) : ''));
+  console.log(chalk.white(`    OCR: ${ocrCount}/2 instances`));
+  console.log(chalk.white(`    Inference: ${infCount}/2 instances`));
+  console.log('');
+}
+
 async function main() {
   const args = process.argv.slice(2);
 
   console.log(chalk.cyan.bold('\n' + '='.repeat(70)));
   console.log(chalk.cyan.bold('         OCR & Embedding Verification Demo'));
   console.log(chalk.cyan.bold('='.repeat(70)));
+
+  // Show service discovery first
+  await discoverServices();
 
   const runOcr = args.length === 0 || args.includes('--ocr') || args.includes('--all');
   const runEmb = args.length === 0 || args.includes('--embedding') || args.includes('--all');
@@ -635,7 +731,7 @@ async function main() {
         ? chalk.yellow.bold('PARTIAL')
         : chalk.red.bold('FAIL');
 
-    console.log(`  ${cat.padEnd(15)} ${status} ${chalk.gray(`(${passed}/${total} tests, avg ${avgTime.toFixed(0)}ms)`)}`);
+    console.log(`  ${cat.padEnd(15)} ${status} ${chalk.white(`(${passed}/${total} tests, avg ${avgTime.toFixed(0)}ms)`)}`);
 
     for (const r of catResults) {
       const icon = r.passed ? chalk.green('  ✓') : chalk.red('  ✗');
@@ -649,8 +745,8 @@ async function main() {
   const totalTime = allResults.reduce((sum, r) => sum + r.timeMs, 0);
 
   console.log(chalk.white.bold('  Overall:'));
-  console.log(chalk.gray(`    Tests: ${totalPassed}/${totalTests} passed`));
-  console.log(chalk.gray(`    Time:  ${(totalTime / 1000).toFixed(1)}s`));
+  console.log(chalk.white(`    Tests: ${totalPassed}/${totalTests} passed`));
+  console.log(chalk.white(`    Time:  ${(totalTime / 1000).toFixed(1)}s`));
 
   console.log(chalk.cyan.bold('\n' + '='.repeat(70) + '\n'));
 

@@ -1,20 +1,12 @@
-# Python GPU Inference Service
-# Uses NVIDIA's vLLM container for proper CUDA support on Grace Hopper (GB10)
+# LLM Model Server - GPU Variant
+# Uses NVIDIA's vLLM container for CUDA support on Grace Hopper (GB10) / DGX Spark
 FROM nvcr.io/nvidia/vllm:25.12-py3
 
 WORKDIR /app
 
-# Install additional dependencies
-RUN pip install --no-cache-dir \
-    fastapi \
-    uvicorn[standard] \
-    transformers \
-    tokenizers \
-    sentence-transformers \
-    pydantic \
-    python-dotenv \
-    httpx \
-    prometheus-client
+# Install additional dependencies (PyTorch + CUDA from base image)
+COPY requirements.gpu.txt /app/requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application code
 COPY src/ /app/
@@ -23,6 +15,7 @@ COPY src/ /app/
 ENV PYTHONUNBUFFERED=1
 ENV MODEL_CACHE_DIR=/models
 ENV PORT=8006
+ENV EXECUTION_PROVIDER=cuda
 
 # Expose port
 EXPOSE 8006

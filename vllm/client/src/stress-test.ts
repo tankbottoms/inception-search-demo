@@ -25,6 +25,17 @@ import chalk from 'chalk';
 const SINGLE_ENDPOINT = process.env.EMBEDDINGS_URL || 'http://localhost:8001';
 const LB_ENDPOINT = process.env.LB_URL || 'http://localhost:8000';
 
+// Multi-node endpoints
+const SPARK1_IP = process.env.SPARK1_IP || '192.168.1.76';
+const SPARK2_IP = process.env.SPARK2_IP || '192.168.1.63';
+
+const ALL_EMBEDDINGS = [
+  { name: 'spark-1:8001', url: 'http://localhost:8001' },
+  { name: 'spark-1:8002', url: 'http://localhost:8002' },
+  { name: `spark-2:8001`, url: `http://${SPARK2_IP}:8001` },
+  { name: `spark-2:8002`, url: `http://${SPARK2_IP}:8002` },
+];
+
 interface StressConfig {
   concurrency: number;
   duration: number;
@@ -293,11 +304,11 @@ function printHeader() {
 function printConfig(config: StressConfig, modelId: string) {
   console.log(chalk.white.bold('Configuration'));
   console.log(chalk.dim('-'.repeat(50)));
-  console.log(chalk.gray(`  Endpoint:     ${config.endpoint}`));
-  console.log(chalk.gray(`  Model:        ${modelId}`));
-  console.log(chalk.gray(`  Concurrency:  ${config.concurrency}`));
-  console.log(chalk.gray(`  Duration:     ${config.duration}s`));
-  console.log(chalk.gray(`  Ramp-up:      ${config.rampUp}s`));
+  console.log(chalk.white(`  Endpoint:     ${config.endpoint}`));
+  console.log(chalk.white(`  Model:        ${modelId}`));
+  console.log(chalk.white(`  Concurrency:  ${config.concurrency}`));
+  console.log(chalk.white(`  Duration:     ${config.duration}s`));
+  console.log(chalk.white(`  Ramp-up:      ${config.rampUp}s`));
   console.log('');
 }
 
@@ -308,7 +319,7 @@ function printProgress(elapsed: number, duration: number, stats: { rps: number; 
   process.stdout.write(`\r  [${bar}] ${pct.toFixed(0)}% | ` +
     chalk.green(`${stats.rps} req/s`) + ' | ' +
     chalk.yellow(`${stats.latency.toFixed(0)}ms`) + ' | ' +
-    (stats.errors > 0 ? chalk.red(`${stats.errors} errors`) : chalk.gray('0 errors')) +
+    (stats.errors > 0 ? chalk.red(`${stats.errors} errors`) : chalk.white('0 errors')) +
     '   ');
 }
 
@@ -329,8 +340,8 @@ function printResults(results: StressResults) {
   console.log(chalk.white.bold('Throughput'));
   console.log(chalk.dim('-'.repeat(50)));
   console.log(chalk.green.bold(`  Requests/sec:       ${formatNumber(results.throughput)} req/s`));
-  console.log(chalk.gray(`  Peak RPS:           ${Math.max(...results.requestsPerSecond)} req/s`));
-  console.log(chalk.gray(`  Avg RPS:            ${formatNumber(results.requestsPerSecond.reduce((a, b) => a + b, 0) / results.requestsPerSecond.length)} req/s`));
+  console.log(chalk.white(`  Peak RPS:           ${Math.max(...results.requestsPerSecond)} req/s`));
+  console.log(chalk.white(`  Avg RPS:            ${formatNumber(results.requestsPerSecond.reduce((a, b) => a + b, 0) / results.requestsPerSecond.length)} req/s`));
   console.log('');
 
   console.log(chalk.white.bold('Latency'));
@@ -382,15 +393,27 @@ async function main() {
   console.log(chalk.white.bold('Service Discovery'));
   console.log(chalk.dim('-'.repeat(50)));
 
+  // Check all embedding endpoints
+  console.log(chalk.white('  Embedding Endpoints:'));
+  let availableEndpoints = 0;
+  for (const endpoint of ALL_EMBEDDINGS) {
+    const model = await getModelId(endpoint.url);
+    if (model) {
+      console.log(chalk.green(`    [OK] ${endpoint.name}`) + chalk.dim(` - ${model}`));
+      availableEndpoints++;
+    } else {
+      console.log(chalk.dim(`    [--] ${endpoint.name}`));
+    }
+  }
+
   const singleModel = await getModelId(SINGLE_ENDPOINT);
   const lbModel = await getModelId(LB_ENDPOINT);
 
-  console.log(singleModel
-    ? chalk.green(`  [OK] Single (${SINGLE_ENDPOINT})`) + chalk.dim(` - ${singleModel}`)
-    : chalk.red(`  [X] Single endpoint not available`));
+  console.log('');
+  console.log(chalk.white('  Load Balancer:'));
   console.log(lbModel
-    ? chalk.green(`  [OK] Load Balanced (${LB_ENDPOINT})`) + chalk.dim(` - Traefik LB`)
-    : chalk.dim(`  [--] Load Balanced: not available`));
+    ? chalk.green(`    [OK] Traefik LB (${LB_ENDPOINT})`) + chalk.dim(` - ${availableEndpoints} backends`)
+    : chalk.dim(`    [--] Traefik LB: not available`));
   console.log('');
 
   if (!singleModel && !lbModel) {
@@ -401,7 +424,7 @@ async function main() {
   if (config.compare) {
     if (!singleModel || !lbModel) {
       console.log(chalk.red('Both single and LB endpoints required for comparison.'));
-      console.log(chalk.gray('Start with: make up-scaled'));
+      console.log(chalk.white('Start with: make up-scaled'));
       process.exit(1);
     }
 

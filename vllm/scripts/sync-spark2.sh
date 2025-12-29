@@ -1,7 +1,7 @@
 #!/bin/bash
-# vLLM Hydra - Sync spark-2 ray worker configuration
+# vLLM Hydra - Sync configuration to spark-2
 #
-# This script rsyncs the necessary files to spark-2 for ray worker deployment
+# This script syncs the necessary files to spark-2 for worker deployment
 #
 # Usage:
 #   ./sync-spark2.sh              # Sync files to spark-2
@@ -14,7 +14,7 @@ VLLM_DIR="$(dirname "$SCRIPT_DIR")"
 
 # Configuration
 SPARK2_HOST="${SPARK2_HOST:-rooot@192.168.1.63}"
-SPARK2_PATH="${SPARK2_PATH:-/home/rooot/Developer/vllm-hydra}"
+SPARK2_PATH="${SPARK2_PATH:-/home/rooot/Docker/vllm-hydra}"
 
 # Colors
 RED='\033[0;31m'
@@ -46,30 +46,44 @@ echo -e "${GREEN}[OK]${NC} Directory ready"
 echo ""
 
 # Files to sync
-FILES_TO_SYNC=(
-    "docker-compose.spark2.yml"
-    ".env"
-    ".env.example"
-)
-
 echo -e "${BLUE}--- Syncing configuration files ---${NC}"
 
-for file in "${FILES_TO_SYNC[@]}"; do
+# Sync docker-compose.spark2.yml
+if [ -f "$VLLM_DIR/docker-compose.spark2.yml" ]; then
+    echo -e "  Syncing: docker-compose.spark2.yml"
+    rsync -avz $DRY_RUN "$VLLM_DIR/docker-compose.spark2.yml" "$SPARK2_HOST:$SPARK2_PATH/"
+else
+    echo -e "${RED}  [ERROR]${NC} docker-compose.spark2.yml not found!"
+    exit 1
+fi
+
+# Sync .env files
+for file in ".env" ".env.example"; do
     if [ -f "$VLLM_DIR/$file" ]; then
         echo -e "  Syncing: $file"
         rsync -avz $DRY_RUN "$VLLM_DIR/$file" "$SPARK2_HOST:$SPARK2_PATH/"
-    else
-        echo -e "${YELLOW}  [SKIP]${NC} $file (not found)"
     fi
 done
 
+# Sync README
+if [ -f "$VLLM_DIR/README.spark2.md" ]; then
+    echo -e "  Syncing: README.spark2.md -> README.md"
+    rsync -avz $DRY_RUN "$VLLM_DIR/README.spark2.md" "$SPARK2_HOST:$SPARK2_PATH/README.md"
+fi
+
 echo ""
 
-# Rename spark2 compose to docker-compose.yml on target
+# Set up docker-compose.yml and clean up old files
 if [ -z "$DRY_RUN" ]; then
-    echo -e "${BLUE}--- Setting up docker-compose.yml ---${NC}"
+    echo -e "${BLUE}--- Setting up spark-2 ---${NC}"
+
+    # Copy spark2 compose to docker-compose.yml
     ssh "$SPARK2_HOST" "cd $SPARK2_PATH && cp docker-compose.spark2.yml docker-compose.yml"
-    echo -e "${GREEN}[OK]${NC} docker-compose.yml created from spark2 config"
+    echo -e "${GREEN}[OK]${NC} docker-compose.yml created"
+
+    # Remove old spark2.yml to avoid confusion
+    ssh "$SPARK2_HOST" "cd $SPARK2_PATH && rm -f docker-compose.spark2.yml"
+    echo -e "${GREEN}[OK]${NC} Cleaned up docker-compose.spark2.yml"
 fi
 
 echo ""
@@ -77,6 +91,15 @@ echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━
 echo -e "${GREEN}     Sync Complete                           ${NC}"
 echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo ""
-echo -e "${YELLOW}To start ray worker on spark-2:${NC}"
+echo -e "${YELLOW}To start services on spark-2:${NC}"
+echo ""
+echo "  # Core services (embeddings + OCR) - default"
 echo "  ssh $SPARK2_HOST 'cd $SPARK2_PATH && docker compose up -d'"
+echo ""
+echo "  # With GPT-OSS (optional, conflicts with OCR)"
+echo "  ssh $SPARK2_HOST 'cd $SPARK2_PATH && docker compose --profile vllm-gpt-oss-20b up -d'"
+echo ""
+echo "  # Or use make commands from spark-1:"
+echo "  make spark2-up          # Core services"
+echo "  make spark2-up-gpt      # Add GPT-OSS (warning: conflicts with OCR)"
 echo ""

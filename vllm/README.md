@@ -57,7 +57,9 @@ make status        # Show container status
 make logs          # Follow service logs
 
 # Testing & Verification
-make health        # Quick health check of all services
+make health        # Health check spark-1 services
+make health-spark2 # Health check spark-2 services
+make health-all    # Health check all nodes
 make test          # Run full test suite (14 tests)
 make verify        # Verify OCR, embeddings, and search
 
@@ -67,10 +69,15 @@ make demo-cot      # Run chain-of-thought demo (4 examples)
 make demo-cot-quick # Quick CoT demo (2 examples)
 make demo-pipeline # Run full OCR pipeline with Blue Book citations
 
-# Benchmarking
-make benchmark     # Run performance benchmark
-make stress        # Stress test embedding load balancer
-make stress-100    # Stress test with 100 concurrent requests
+# Benchmarking & Stability
+make benchmark          # Run performance benchmark
+make benchmark-full     # Extended benchmark (20 iters, 100 reqs)
+make benchmark-extended # Full pipeline with demo/files PDFs
+make benchmark-comprehensive  # 4-pass stability test (2x forward + 2x backward)
+make stability          # Single iteration stability test
+make stability-5        # 5 iteration stability test
+make stress             # Stress test embedding load balancer
+make stress-100         # Stress test with 100 concurrent requests
 
 # Development
 make install       # Install client dependencies
@@ -100,16 +107,22 @@ make deploy
 ./scripts/hydra-start.sh
 ```
 
-### Start Workers on spark-2
+### Start Services on spark-2
 
 ```bash
-# From spark-1 (via SSH)
-make workers
+# From spark-1 (recommended)
+make spark2-up            # Core services (embeddings + OCR)
+make spark2-up-embed-scaled  # With 2x embeddings
 
 # Or directly on spark-2
-cd ~/Developer/inception-search-demo/vllm
-docker compose -f docker-compose.spark2.yml up -d
+cd ~/Docker/vllm-hydra
+docker compose up -d      # Core services (embeddings + OCR)
+
+# GPT-OSS on spark-2 (optional, conflicts with OCR)
+make spark2-up-gpt        # Warning: stops OCR
 ```
+
+**Note**: GPT-OSS is disabled by default on spark-2 because it conflicts with OCR on the same GPU. Use the Traefik load balancer on spark-1:8020 to access inference.
 
 ### Sync Files to spark-2
 
@@ -126,11 +139,44 @@ make sync-spark2
 ```bash
 # Check all nodes
 make verify-cluster
+# or
+make health-all
 
 # Manual verification
 curl http://192.168.1.76:8001/health  # spark-1 embeddings
 curl http://192.168.1.76:8004/health  # spark-1 inference
-curl http://192.168.1.63:8001/health  # spark-2 embeddings (if running)
+curl http://192.168.1.63:8001/health  # spark-2 embeddings
+curl http://192.168.1.63:8004/health  # spark-2 inference
+```
+
+### Automatic Fallback
+
+The client automatically detects available inference endpoints across nodes:
+
+```bash
+# Health command shows both nodes
+make health-all
+
+# Expected output:
+# Spark-1 (localhost) Health Check
+# ===================================
+#   Embeddings (8001):   OK
+#   Embeddings-2 (8002): OK
+#   OCR (8003):          OK
+#   Inference (8004):    OK
+#
+# Load Balancers (Traefik)
+# ========================
+#   Embeddings LB (8000): OK
+#   OCR LB (8010):        OK
+#   Inference LB (8020):  OK
+#
+# Spark-2 (192.168.1.63) Health Check
+# ===================================
+#   Embeddings (8001):   OK
+#   Embeddings-2 (8002): --  (optional, requires profile)
+#   OCR (8003):          OK
+#   Inference (8004):    --  (disabled by default)
 ```
 
 ## Architecture
@@ -151,7 +197,7 @@ curl http://192.168.1.63:8001/health  # spark-2 embeddings (if running)
 |                                                                          |
 |  LOAD BALANCING (--profile embeddings-scaled)                            |
 |  +---------------------------+  +---------------------------+            |
-|  | vllm-freelaw-modernbert-2 |  |    embeddings-lb          |            |
+|  | vllm-freelaw-modernbert-2 |  |  inception-services-lb    |            |
 |  | (Replica 2)               |  |    (Traefik LB)           |            |
 |  | Port: 8002                |  | Port: 8000 (unified)      |            |
 |  +---------------------------+  | Dashboard: 8088           |            |
@@ -185,7 +231,9 @@ curl http://192.168.1.63:8001/health  # spark-2 embeddings (if running)
 | Service | Container | Port | Purpose |
 |---------|-----------|------|---------|
 | Embeddings Replica 2 | `vllm-freelaw-modernbert-2` | 8002 | Second embedding instance |
-| Load Balancer | `embeddings-lb` | 8000 | Traefik round-robin LB |
+| Embeddings LB | `inception-services-lb` | 8000 | Traefik LB (spark-1:8001,8002 + spark-2:8001,8002) |
+| OCR LB | `inception-services-lb` | 8010 | Traefik LB (spark-1:8003 + spark-2:8003) |
+| Inference LB | `inception-services-lb` | 8020 | Traefik LB (spark-1:8004 + spark-2:8004) |
 | LB Dashboard | - | 8088 | Traefik monitoring UI |
 
 ### Inference Options (choose one profile)
@@ -216,8 +264,12 @@ bun run cot:quick           # Quick CoT demo (2 examples)
 bun run cot:test            # CoT verification tests
 bun run ocr-pipeline        # Full OCR pipeline with Blue Book citations
 
-# Benchmarking
+# Benchmarking & Stability
 bun run benchmark           # Performance benchmark
+bun run benchmark:extended  # Full pipeline with demo/files PDFs
+bun run stability           # Single iteration stability test (OCR + embed + citation + summary)
+bun run stability:5         # 5 iteration stability test
+bun run benchmark:comprehensive  # 4-pass stability (2x forward + 2x backward)
 bun run stress              # Stress test (50 concurrent, 30s)
 bun run stress:compare      # Compare single vs load balanced
 bun run stress --concurrency 100 --duration 60  # Custom stress test
@@ -373,6 +425,7 @@ vllm/
 │   │   ├── cot-demo.ts        # Chain-of-thought demo
 │   │   ├── verify-demo.ts     # OCR/embedding verification
 │   │   ├── stress-test.ts     # Load balancer stress test
+│   │   ├── stability-test.ts  # Comprehensive stability benchmark
 │   │   └── ocr-pipeline.ts    # Full OCR pipeline
 │   └── package.json
 ├── scripts/
@@ -425,7 +478,7 @@ curl http://localhost:8002/health
 open http://localhost:8088
 
 # Check Traefik logs
-docker logs embeddings-lb
+docker logs inception-services-lb
 ```
 
 ## Related

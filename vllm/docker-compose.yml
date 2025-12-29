@@ -126,28 +126,27 @@ services:
       - "hydra.port=8002"
 
   # ===========================================================================
-  # TRAEFIK LOAD BALANCER - embeddings-lb
-  # Load balances across ModernBERT replicas
-  # Unified endpoint: http://localhost:8000/v1/embeddings
-  # Dashboard: http://localhost:8088
+  # TRAEFIK LOAD BALANCER - inception-services-lb
+  # Traefik Load Balancer for all services across spark-1 and spark-2
+  # Endpoints:
+  #   - http://localhost:8000 - Embeddings LB (spark-1:8001, spark-1:8002, spark-2:8001)
+  #   - http://localhost:8010 - OCR LB (spark-1:8003, spark-2:8003)
+  #   - http://localhost:8020 - Inference LB (spark-1:8004, spark-2:8004)
+  #   - http://localhost:8088 - Dashboard
   # ===========================================================================
-  embeddings-lb:
-    container_name: embeddings-lb
+  inception-services-lb:
+    container_name: inception-services-lb
     image: traefik:v3.2
     restart: unless-stopped
     profiles:
       - embeddings-scaled
     command:
-      - "--api.dashboard=true"
-      - "--api.insecure=true"
-      - "--entrypoints.embeddings.address=:8000"
-      - "--entrypoints.traefik.address=:8088"
-      - "--providers.file.filename=/etc/traefik/dynamic.yml"
-      - "--providers.file.watch=true"
-      - "--log.level=INFO"
+      - "--configFile=/etc/traefik/traefik.yml"
     ports:
-      - "8000:8000"
-      - "8088:8088"
+      - "8000:8000"   # Embeddings LB
+      - "8010:8010"   # OCR LB
+      - "8020:8020"   # Inference LB
+      - "8088:8080"   # Dashboard
     volumes:
       - ./traefik:/etc/traefik:ro
     extra_hosts:
@@ -156,7 +155,7 @@ services:
       - vllm-freelaw-modernbert
       - vllm-freelaw-modernbert-2
     labels:
-      - "hydra.service=embeddings-lb"
+      - "hydra.service=inception-services-lb"
       - "hydra.type=load-balancer"
       - "hydra.port=8000"
 
@@ -212,6 +211,9 @@ services:
   # GPT-OSS 20B model for general inference
   # Use --profile gpt-oss to enable: docker compose --profile gpt-oss up -d
   #
+  # IMPORTANT: Uses NVIDIA vLLM 25.12+ for Harmony tokenizer support
+  # (nightly-aarch64 and older NVIDIA images don't have the fix)
+  #
   # Loading optimizations applied:
   #   - torch.compile cache persisted (saves ~30s on restart)
   #   - max-num-seqs reduced for faster KV cache warmup
@@ -219,7 +221,7 @@ services:
   # ===========================================================================
   vllm-gpt-oss-20b:
     container_name: vllm-gpt-oss-20b
-    image: ${VLLM_IMAGE:-vllm/vllm-openai:nightly-aarch64}
+    image: nvcr.io/nvidia/vllm:25.12-py3
     restart: unless-stopped
     profiles:
       - gpt-oss
@@ -268,10 +270,11 @@ services:
   # GPT-OSS 20B EAGER MODE - Fastest startup (~80s), slower inference
   # Skips CUDA graph compilation entirely
   # Use --profile gpt-oss-eager for quick iterations/testing
+  # IMPORTANT: Uses NVIDIA vLLM 25.12+ for Harmony tokenizer support
   # ===========================================================================
   vllm-gpt-oss-20b-eager:
     container_name: vllm-gpt-oss-20b
-    image: ${VLLM_IMAGE:-vllm/vllm-openai:nightly-aarch64}
+    image: nvcr.io/nvidia/vllm:25.12-py3
     restart: unless-stopped
     profiles:
       - gpt-oss-eager
